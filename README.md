@@ -1,0 +1,2 @@
+# LMAo
+Redefining Natural Stupidity
