@@ -1,2 +1,1 @@
-# LMAo
-Redefining Natural Stupidity
+# LMA-o : Learning-Material Agent (omni)
