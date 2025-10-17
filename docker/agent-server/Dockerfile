@@ -29,4 +29,4 @@ USER app
 EXPOSE 8001
 
 # Run the agent server
-CMD ["python", "-c", "import asyncio; from src.agent_server.main import agent_server; asyncio.run(agent_server.initialize()); print('Agent Server running...'); asyncio.get_event_loop().run_forever()"]
+CMD ["python", "-m", "uvicorn", "src.agent_server.main:app", "--host", "0.0.0.0", "--port", "8001"]

@@ -1,0 +1,65 @@
+# Testing dependencies for SE SME Agent system
+
+# Core testing framework
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.1.0
+pytest-mock>=3.11.0
+pytest-xdist>=3.3.0  # For parallel test execution
+pytest-timeout>=2.1.0
+pytest-html>=3.2.0  # HTML test reports
+
+# HTTP testing
+httpx>=0.24.0
+requests-mock>=1.11.0
+
+# Database testing
+pytest-postgresql>=5.0.0
+pytest-redis>=3.0.0
+
+# Performance testing
+pytest-benchmark>=4.0.0
+locust>=2.15.0  # For load testing
+
+# Security testing
+bandit>=1.7.5  # Security linting
+safety>=2.3.0  # Dependency vulnerability scanning
+
+# Mocking and fixtures
+factory-boy>=3.3.0
+faker>=19.0.0
+responses>=0.23.0
+
+# Code quality
+flake8>=6.0.0
+black>=23.0.0
+isort>=5.12.0
+mypy>=1.5.0
+
+# Coverage reporting
+coverage>=7.2.0
+coverage-badge>=1.1.0
+
+# Test data and utilities
+freezegun>=1.2.0  # Time mocking
+testcontainers>=3.7.0  # Docker containers for testing
+pydantic>=2.0.0  # Data validation
+
+# FastAPI testing
+fastapi[all]>=0.100.0
+starlette>=0.27.0
+
+# Async testing utilities
+aioresponses>=0.7.4
+asynctest>=0.13.0
+
+# Documentation testing
+doctest>=1.0.0
+
+# Performance profiling
+py-spy>=0.3.14
+memory-profiler>=0.61.0
+
+# Reporting and visualization
+pytest-json-report>=1.5.0
+allure-pytest>=2.13.0  # Advanced test reporting

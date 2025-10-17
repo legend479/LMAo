@@ -1112,11 +1112,63 @@ class CodeGenerator:
         # Generate prompt
         generated_prompt = await self.prompt_framework.generate_prompt(prompt_request)
 
-        # For now, return template-based code
-        # In a real implementation, this would call an LLM with the generated prompt
-        template_code = await self._get_template_code(request)
+        # Generate code using LLM integration
+        try:
+            from src.shared.llm.integration import get_llm_integration
 
-        return template_code
+            llm_integration = await get_llm_integration()
+
+            # Create system prompt for code generation
+            system_prompt = f"""You are an expert {request.language.value} developer. Generate clean, efficient, and well-documented code.
+
+            Guidelines:
+            - Follow {request.language.value} best practices and conventions
+            - Include comprehensive docstrings and comments
+            - Handle edge cases and errors appropriately
+            - Write maintainable and readable code
+            - Include type hints where applicable
+            - Follow the specified style guide: {request.style_guide or 'PEP 8 for Python, standard conventions for others'}
+            """
+
+            # Build the prompt with all requirements
+            prompt_parts = [
+                f"Generate {request.code_type.value} in {request.language.value}:"
+            ]
+            prompt_parts.append(f"Description: {request.description}")
+
+            if request.requirements:
+                prompt_parts.append("\nRequirements:")
+                for req in request.requirements:
+                    prompt_parts.append(f"- {req}")
+
+            if request.constraints:
+                prompt_parts.append("\nConstraints:")
+                for constraint in request.constraints:
+                    prompt_parts.append(f"- {constraint}")
+
+            if request.include_tests:
+                prompt_parts.append("\nInclude comprehensive unit tests.")
+
+            if request.include_documentation:
+                prompt_parts.append("\nInclude detailed documentation and examples.")
+
+            prompt = "\n".join(prompt_parts)
+
+            # Generate code using LLM
+            generated_code = await llm_integration.generate_response(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=0.3,  # Lower temperature for more consistent code
+                max_tokens=3000,
+            )
+
+            return generated_code
+
+        except Exception as e:
+            logger.error(f"LLM code generation failed: {str(e)}")
+            # Fallback to template-based code
+            template_code = await self._get_template_code(request)
+            return f"# Note: LLM generation failed, using template\n# Error: {str(e)}\n\n{template_code}"
 
     async def _generate_documentation(
         self, code: str, request: CodeGenerationRequest

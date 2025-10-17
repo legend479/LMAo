@@ -2,7 +2,7 @@
   "name": "se-sme-agent-ui",
   "version": "1.0.0",
   "description": "Interactive Web UI for SE SME Agent",
-  "main": "src/index.js",
+  "main": "src/index.tsx",
   "scripts": {
     "start": "react-scripts start",
     "build": "react-scripts build",

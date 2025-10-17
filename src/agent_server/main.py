@@ -151,3 +151,94 @@ async def get_agent_server() -> AgentServer:
     if not agent_server._initialized:
         await agent_server.initialize()
     return agent_server
+
+
+# FastAPI application for HTTP endpoints
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from typing import Dict, Any
+
+app = FastAPI(
+    title="SE SME Agent - Agent Server",
+    description="Agent orchestration and tool execution service",
+    version="1.0.0",
+)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize agent server on startup"""
+    await agent_server.initialize()
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup on shutdown"""
+    await agent_server.shutdown()
+
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    return {
+        "status": "healthy",
+        "service": "agent-server",
+        "version": "1.0.0",
+        "initialized": agent_server._initialized,
+    }
+
+
+@app.post("/process")
+async def process_message(request: Dict[str, Any]):
+    """Process a message through the agent"""
+    try:
+        message = request.get("message", "")
+        session_id = request.get("session_id", "default")
+        user_id = request.get("user_id")
+
+        result = await agent_server.process_message(message, session_id, user_id)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/tools")
+async def get_available_tools():
+    """Get available tools"""
+    try:
+        tools = await agent_server.get_available_tools()
+        return tools
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/tools/{tool_name}/execute")
+async def execute_tool(tool_name: str, request: Dict[str, Any]):
+    """Execute a specific tool"""
+    try:
+        parameters = request.get("parameters", {})
+        session_id = request.get("session_id", "default")
+
+        result = await agent_server.execute_tool(tool_name, parameters, session_id)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/metrics")
+async def get_metrics():
+    """Get service metrics"""
+    return {
+        "service": "agent-server",
+        "status": "healthy",
+        "initialized": agent_server._initialized,
+    }

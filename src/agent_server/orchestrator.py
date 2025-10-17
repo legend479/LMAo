@@ -16,6 +16,7 @@ from langchain_core.runnables import RunnableConfig
 
 from src.shared.logging import get_logger
 from src.shared.config import get_settings
+from src.shared.llm.integration import get_llm_integration
 
 logger = get_logger(__name__)
 
@@ -122,6 +123,7 @@ class LangGraphOrchestrator:
         self.execution_history: Dict[str, List[ExecutionResult]] = {}
         self.workflow_graphs: Dict[str, StateGraph] = {}
         self.workflow_nodes: Dict[str, Dict[str, WorkflowNode]] = {}
+        self.llm_integration = None
         self._initialized = False
 
     async def initialize(self):
@@ -142,6 +144,10 @@ class LangGraphOrchestrator:
 
             # Initialize LangGraph checkpointer
             self.checkpointer = RedisSaver(redis_url)
+
+            # Initialize LLM integration
+            self.llm_integration = await get_llm_integration()
+            logger.info("LLM integration initialized")
 
             # Initialize workflow monitoring
             await self._setup_workflow_monitoring()
@@ -560,62 +566,597 @@ class LangGraphOrchestrator:
     ) -> Dict[str, Any]:
         """Execute a tool-based task"""
 
+        start_time = asyncio.get_event_loop().time()
         tool_name = task.get("tool", "unknown")
         parameters = task.get("parameters", {})
 
-        # TODO: Integrate with tool registry
-        # For now, return placeholder result
+        try:
+            # Handle RAG retrieval task
+            if tool_name == "rag_search" or tool_name == "knowledge_retrieval":
+                return await self._execute_rag_search(task, state)
 
-        return {
-            "tool": tool_name,
-            "parameters": parameters,
-            "result": f"Tool {tool_name} executed successfully (placeholder)",
-            "execution_time": 0.1,
-        }
+            # Handle document analysis task
+            elif tool_name == "document_analysis":
+                return await self._execute_document_analysis(task, state)
+
+            # Handle code analysis task
+            elif tool_name == "code_analysis":
+                return await self._execute_code_analysis(task, state)
+
+            # Generic tool execution (placeholder for now)
+            else:
+                execution_time = asyncio.get_event_loop().time() - start_time
+                return {
+                    "tool": tool_name,
+                    "parameters": parameters,
+                    "result": f"Tool {tool_name} executed successfully (placeholder implementation)",
+                    "execution_time": execution_time,
+                    "metadata": {
+                        "tool_type": "generic",
+                        "parameter_count": len(parameters),
+                    },
+                }
+
+        except Exception as e:
+            logger.error(f"Tool execution failed: {tool_name}, error: {str(e)}")
+            execution_time = asyncio.get_event_loop().time() - start_time
+
+            return {
+                "tool": tool_name,
+                "parameters": parameters,
+                "result": f"Tool execution failed: {str(e)}",
+                "execution_time": execution_time,
+                "error": True,
+                "error_message": str(e),
+            }
+
+    async def _execute_rag_search(
+        self, task: Dict[str, Any], state: WorkflowState
+    ) -> Dict[str, Any]:
+        """Execute RAG-based knowledge retrieval"""
+
+        start_time = asyncio.get_event_loop().time()
+
+        try:
+            query = task.get("query", task.get("parameters", {}).get("query", ""))
+            max_results = task.get("max_results", 5)
+
+            # Import RAG pipeline here to avoid circular imports
+            from src.rag_pipeline.main import RAGPipeline
+
+            # Initialize RAG pipeline if not already done
+            if not hasattr(self, "rag_pipeline"):
+                self.rag_pipeline = RAGPipeline()
+                await self.rag_pipeline.initialize()
+
+            # Perform search
+            search_results = await self.rag_pipeline.search(
+                query=query, max_results=max_results, include_metadata=True
+            )
+
+            # Format results for LLM consumption
+            context_chunks = []
+            for result in search_results.get("results", []):
+                context_chunks.append(
+                    {
+                        "content": result.get("content", ""),
+                        "source": result.get("metadata", {}).get("source", "unknown"),
+                        "score": result.get("score", 0.0),
+                    }
+                )
+
+            # Generate response using retrieved context
+            if context_chunks:
+                context_text = "\n\n".join(
+                    [
+                        f"Source: {chunk['source']}\nContent: {chunk['content']}"
+                        for chunk in context_chunks[:3]  # Use top 3 results
+                    ]
+                )
+
+                system_prompt = """You are a knowledgeable software engineering assistant with access to relevant documentation and resources.
+                Use the provided context to answer questions accurately and comprehensively.
+                
+                Guidelines:
+                - Base your answer primarily on the provided context
+                - If the context doesn't contain enough information, acknowledge this
+                - Cite sources when possible
+                - Provide practical, actionable information
+                - Maintain technical accuracy
+                """
+
+                prompt = f"""Context from knowledge base:
+{context_text}
+
+Query: {query}
+
+Please provide a comprehensive answer based on the context above."""
+
+                response = await self.llm_integration.generate_response(
+                    prompt=prompt,
+                    system_prompt=system_prompt,
+                    temperature=0.4,
+                    max_tokens=1500,
+                )
+
+                result_text = response
+            else:
+                result_text = (
+                    f"No relevant information found in the knowledge base for: {query}"
+                )
+
+            execution_time = asyncio.get_event_loop().time() - start_time
+
+            return {
+                "tool": "rag_search",
+                "result": result_text,
+                "execution_time": execution_time,
+                "metadata": {
+                    "query": query,
+                    "results_found": len(context_chunks),
+                    "sources": [chunk["source"] for chunk in context_chunks],
+                    "top_score": context_chunks[0]["score"] if context_chunks else 0.0,
+                },
+            }
+
+        except Exception as e:
+            logger.error(f"RAG search failed: {str(e)}")
+            execution_time = asyncio.get_event_loop().time() - start_time
+
+            return {
+                "tool": "rag_search",
+                "result": f"Knowledge retrieval failed: {str(e)}",
+                "execution_time": execution_time,
+                "error": True,
+                "error_message": str(e),
+            }
+
+    async def _execute_document_analysis(
+        self, task: Dict[str, Any], state: WorkflowState
+    ) -> Dict[str, Any]:
+        """Execute document analysis task"""
+
+        start_time = asyncio.get_event_loop().time()
+
+        try:
+            document_content = task.get("content", "")
+            analysis_type = task.get("analysis_type", "general")
+
+            system_prompt = """You are an expert document analyst specializing in software engineering documentation.
+            Analyze documents thoroughly and provide structured insights.
+            
+            Guidelines:
+            - Identify key concepts, patterns, and structures
+            - Highlight important technical details
+            - Note any issues, gaps, or inconsistencies
+            - Provide actionable recommendations
+            - Structure your analysis clearly
+            """
+
+            prompt = f"""Please analyze the following document with focus on {analysis_type} analysis:
+
+Document Content:
+{document_content}
+
+Provide a structured analysis including:
+1. Summary of key points
+2. Technical details and concepts
+3. Quality assessment
+4. Recommendations for improvement
+5. Potential issues or gaps"""
+
+            analysis = await self.llm_integration.generate_response(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=0.3,
+                max_tokens=2000,
+            )
+
+            execution_time = asyncio.get_event_loop().time() - start_time
+
+            return {
+                "tool": "document_analysis",
+                "result": analysis,
+                "execution_time": execution_time,
+                "metadata": {
+                    "analysis_type": analysis_type,
+                    "document_length": len(document_content),
+                    "analysis_length": len(analysis),
+                },
+            }
+
+        except Exception as e:
+            logger.error(f"Document analysis failed: {str(e)}")
+            execution_time = asyncio.get_event_loop().time() - start_time
+
+            return {
+                "tool": "document_analysis",
+                "result": f"Document analysis failed: {str(e)}",
+                "execution_time": execution_time,
+                "error": True,
+                "error_message": str(e),
+            }
+
+    async def _execute_code_analysis(
+        self, task: Dict[str, Any], state: WorkflowState
+    ) -> Dict[str, Any]:
+        """Execute code analysis task"""
+
+        start_time = asyncio.get_event_loop().time()
+
+        try:
+            code_content = task.get("code", "")
+            language = task.get("language", "python")
+            analysis_focus = task.get("focus", ["quality", "security", "performance"])
+
+            system_prompt = f"""You are an expert code reviewer specializing in {language} development.
+            Analyze code thoroughly for quality, security, performance, and best practices.
+            
+            Guidelines:
+            - Identify potential bugs, security vulnerabilities, and performance issues
+            - Check adherence to coding standards and best practices
+            - Suggest specific improvements with examples
+            - Consider maintainability and readability
+            - Provide actionable recommendations
+            """
+
+            focus_text = (
+                ", ".join(analysis_focus)
+                if isinstance(analysis_focus, list)
+                else analysis_focus
+            )
+
+            prompt = f"""Please analyze the following {language} code with focus on {focus_text}:
+
+Code:
+```{language}
+{code_content}
+```
+
+Provide a comprehensive analysis including:
+1. Code quality assessment
+2. Security considerations
+3. Performance implications
+4. Best practices compliance
+5. Specific improvement suggestions
+6. Overall recommendations"""
+
+            analysis = await self.llm_integration.generate_response(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=0.2,  # Low temperature for consistent analysis
+                max_tokens=2500,
+            )
+
+            execution_time = asyncio.get_event_loop().time() - start_time
+
+            return {
+                "tool": "code_analysis",
+                "result": analysis,
+                "execution_time": execution_time,
+                "metadata": {
+                    "language": language,
+                    "analysis_focus": analysis_focus,
+                    "code_lines": len(code_content.split("\n")),
+                    "analysis_length": len(analysis),
+                },
+            }
+
+        except Exception as e:
+            logger.error(f"Code analysis failed: {str(e)}")
+            execution_time = asyncio.get_event_loop().time() - start_time
+
+            return {
+                "tool": "code_analysis",
+                "result": f"Code analysis failed: {str(e)}",
+                "execution_time": execution_time,
+                "error": True,
+                "error_message": str(e),
+            }
 
     async def _execute_content_generation_task(
         self, task: Dict[str, Any], state: WorkflowState
     ) -> Dict[str, Any]:
         """Execute content generation task"""
 
-        return {
-            "type": "content_generation",
-            "result": "Content generated successfully (placeholder)",
-            "execution_time": 0.2,
-        }
+        start_time = asyncio.get_event_loop().time()
+
+        try:
+            # Extract task parameters
+            prompt = task.get("prompt", "Generate content based on the given context")
+            topic = task.get("topic", "software engineering")
+            audience = task.get("audience", "intermediate")
+            content_type = task.get("content_type", "explanation")
+
+            # Create system prompt for content generation
+            system_prompt = f"""You are an expert software engineering content creator. 
+            Generate high-quality {content_type} content about {topic} for {audience} level audience.
+            
+            Guidelines:
+            - Be accurate and technically precise
+            - Use appropriate examples and analogies
+            - Structure content clearly with headings and bullet points
+            - Include practical applications where relevant
+            - Maintain appropriate technical depth for the audience level
+            """
+
+            # Generate content using LLM
+            content = await self.llm_integration.generate_response(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=0.7,
+                max_tokens=2000,
+            )
+
+            execution_time = asyncio.get_event_loop().time() - start_time
+
+            return {
+                "type": "content_generation",
+                "result": content,
+                "execution_time": execution_time,
+                "metadata": {
+                    "topic": topic,
+                    "audience": audience,
+                    "content_type": content_type,
+                    "tokens_used": len(content.split()) * 1.3,  # Rough estimate
+                },
+            }
+
+        except Exception as e:
+            logger.error(f"Content generation task failed: {str(e)}")
+            execution_time = asyncio.get_event_loop().time() - start_time
+
+            return {
+                "type": "content_generation",
+                "result": f"I apologize, but I encountered an error while generating content: {str(e)}",
+                "execution_time": execution_time,
+                "error": True,
+                "error_message": str(e),
+            }
 
     async def _execute_code_generation_task(
         self, task: Dict[str, Any], state: WorkflowState
     ) -> Dict[str, Any]:
         """Execute code generation task"""
 
-        return {
-            "type": "code_generation",
-            "result": "Code generated successfully (placeholder)",
-            "execution_time": 0.3,
-        }
+        start_time = asyncio.get_event_loop().time()
+
+        try:
+            # Extract task parameters
+            description = task.get("description", "Write code based on requirements")
+            language = task.get("language", "python")
+            requirements = task.get("requirements", [])
+            style_guide = task.get("style_guide", "Follow best practices")
+
+            # Create system prompt for code generation
+            system_prompt = f"""You are an expert {language} developer. Generate clean, efficient, and well-documented code.
+
+            Guidelines:
+            - Follow {language} best practices and conventions
+            - Include comprehensive docstrings and comments
+            - Handle edge cases and errors appropriately
+            - Write maintainable and readable code
+            - Include type hints where applicable
+            - Follow the specified style guide: {style_guide}
+            """
+
+            # Build the prompt with requirements
+            prompt_parts = [description]
+
+            if requirements:
+                prompt_parts.append("\nRequirements:")
+                for req in requirements:
+                    prompt_parts.append(f"- {req}")
+
+            prompt_parts.append(
+                f"\nGenerate {language} code that fulfills these requirements."
+            )
+            prompt = "\n".join(prompt_parts)
+
+            # Generate code using LLM
+            code = await self.llm_integration.generate_response(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=0.3,  # Lower temperature for more consistent code
+                max_tokens=2500,
+            )
+
+            execution_time = asyncio.get_event_loop().time() - start_time
+
+            return {
+                "type": "code_generation",
+                "result": code,
+                "execution_time": execution_time,
+                "metadata": {
+                    "language": language,
+                    "requirements_count": len(requirements),
+                    "style_guide": style_guide,
+                    "code_lines": len(code.split("\n")),
+                },
+            }
+
+        except Exception as e:
+            logger.error(f"Code generation task failed: {str(e)}")
+            execution_time = asyncio.get_event_loop().time() - start_time
+
+            return {
+                "type": "code_generation",
+                "result": f"# Error generating code: {str(e)}\n# Please try again with more specific requirements",
+                "execution_time": execution_time,
+                "error": True,
+                "error_message": str(e),
+            }
 
     async def _execute_analysis_task(
         self, task: Dict[str, Any], state: WorkflowState
     ) -> Dict[str, Any]:
         """Execute analysis task"""
 
-        return {
-            "type": "analysis",
-            "result": "Analysis completed successfully (placeholder)",
-            "execution_time": 0.1,
-        }
+        start_time = asyncio.get_event_loop().time()
+
+        try:
+            # Extract task parameters
+            content = task.get("content", "")
+            analysis_type = task.get("analysis_type", "general")
+            focus_areas = task.get("focus_areas", [])
+
+            # Create system prompt for analysis
+            system_prompt = f"""You are an expert software engineering analyst. Perform thorough {analysis_type} analysis.
+
+            Guidelines:
+            - Provide detailed, structured analysis
+            - Identify key patterns, issues, and opportunities
+            - Give actionable recommendations
+            - Support findings with specific examples
+            - Consider best practices and industry standards
+            - Be objective and comprehensive
+            """
+
+            # Build analysis prompt
+            prompt_parts = [
+                f"Please perform a {analysis_type} analysis of the following:"
+            ]
+            prompt_parts.append(f"\nContent to analyze:\n{content}")
+
+            if focus_areas:
+                prompt_parts.append("\nFocus particularly on:")
+                for area in focus_areas:
+                    prompt_parts.append(f"- {area}")
+
+            prompt_parts.append(
+                "\nProvide a structured analysis with findings and recommendations."
+            )
+            prompt = "\n".join(prompt_parts)
+
+            # Generate analysis using LLM
+            analysis = await self.llm_integration.generate_response(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=0.4,  # Balanced temperature for analytical thinking
+                max_tokens=2000,
+            )
+
+            execution_time = asyncio.get_event_loop().time() - start_time
+
+            return {
+                "type": "analysis",
+                "result": analysis,
+                "execution_time": execution_time,
+                "metadata": {
+                    "analysis_type": analysis_type,
+                    "focus_areas": focus_areas,
+                    "content_length": len(content),
+                    "analysis_length": len(analysis),
+                },
+            }
+
+        except Exception as e:
+            logger.error(f"Analysis task failed: {str(e)}")
+            execution_time = asyncio.get_event_loop().time() - start_time
+
+            return {
+                "type": "analysis",
+                "result": f"Analysis could not be completed due to an error: {str(e)}",
+                "execution_time": execution_time,
+                "error": True,
+                "error_message": str(e),
+            }
 
     async def _execute_general_task(
         self, task: Dict[str, Any], state: WorkflowState
     ) -> Dict[str, Any]:
         """Execute general task"""
 
-        return {
-            "type": "general",
-            "result": "General task completed successfully (placeholder)",
-            "execution_time": 0.1,
-        }
+        start_time = asyncio.get_event_loop().time()
+
+        try:
+            # Extract task parameters
+            query = task.get("query", task.get("prompt", ""))
+            context = task.get("context", {})
+            task_type = task.get("task_type", "general_query")
+
+            # Create system prompt based on task type
+            if task_type == "question_answering":
+                system_prompt = """You are a knowledgeable software engineering expert. Answer questions accurately and comprehensively.
+                
+                Guidelines:
+                - Provide clear, accurate answers
+                - Include relevant examples when helpful
+                - Explain complex concepts in understandable terms
+                - Cite best practices and industry standards
+                - If uncertain, acknowledge limitations
+                """
+            elif task_type == "explanation":
+                system_prompt = """You are an expert technical educator. Explain concepts clearly and thoroughly.
+                
+                Guidelines:
+                - Break down complex topics into digestible parts
+                - Use analogies and examples to clarify concepts
+                - Structure explanations logically
+                - Consider the audience's technical level
+                - Provide practical context and applications
+                """
+            elif task_type == "recommendation":
+                system_prompt = """You are a software engineering consultant. Provide thoughtful recommendations.
+                
+                Guidelines:
+                - Consider multiple approaches and trade-offs
+                - Provide specific, actionable recommendations
+                - Explain the reasoning behind suggestions
+                - Consider context and constraints
+                - Highlight potential risks and benefits
+                """
+            else:
+                system_prompt = """You are a helpful software engineering assistant. Provide accurate and useful responses.
+                
+                Guidelines:
+                - Be helpful and informative
+                - Provide accurate technical information
+                - Structure responses clearly
+                - Include relevant examples
+                - Be concise but comprehensive
+                """
+
+            # Add context to the prompt if available
+            if context:
+                context_str = "\n".join([f"{k}: {v}" for k, v in context.items()])
+                full_prompt = f"Context:\n{context_str}\n\nQuery: {query}"
+            else:
+                full_prompt = query
+
+            # Generate response using LLM
+            response = await self.llm_integration.generate_response(
+                prompt=full_prompt,
+                system_prompt=system_prompt,
+                temperature=0.6,
+                max_tokens=1500,
+            )
+
+            execution_time = asyncio.get_event_loop().time() - start_time
+
+            return {
+                "type": "general",
+                "result": response,
+                "execution_time": execution_time,
+                "metadata": {
+                    "task_type": task_type,
+                    "query_length": len(query),
+                    "context_provided": bool(context),
+                    "response_length": len(response),
+                },
+            }
+
+        except Exception as e:
+            logger.error(f"General task failed: {str(e)}")
+            execution_time = asyncio.get_event_loop().time() - start_time
+
+            return {
+                "type": "general",
+                "result": f"I apologize, but I encountered an error while processing your request: {str(e)}",
+                "execution_time": execution_time,
+                "error": True,
+                "error_message": str(e),
+            }
 
     def _generate_final_response(
         self, final_state: Dict[str, Any], tool_results: List[Dict[str, Any]]

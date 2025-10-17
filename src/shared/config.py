@@ -88,12 +88,39 @@ class Settings(BaseSettings):
 
     # LLM Configuration
     llm_provider: str = Field(
-        default="openai", description="LLM provider (openai, anthropic, local)"
+        default="openai",
+        description="LLM provider (openai, anthropic, google, ollama, local)",
     )
     llm_model: str = Field(default="gpt-3.5-turbo", description="LLM model name")
     llm_api_key: Optional[str] = Field(default=None, description="LLM API key")
     llm_base_url: Optional[str] = Field(
-        default=None, description="LLM base URL for local models"
+        default=None, description="LLM base URL for local/custom models"
+    )
+
+    # Provider-specific configurations
+    openai_api_key: Optional[str] = Field(default=None, description="OpenAI API key")
+    openai_organization: Optional[str] = Field(
+        default=None, description="OpenAI organization ID"
+    )
+    openai_base_url: Optional[str] = Field(default=None, description="OpenAI base URL")
+
+    anthropic_api_key: Optional[str] = Field(
+        default=None, description="Anthropic API key"
+    )
+    anthropic_base_url: Optional[str] = Field(
+        default=None, description="Anthropic base URL"
+    )
+
+    google_api_key: Optional[str] = Field(default=None, description="Google AI API key")
+    google_base_url: Optional[str] = Field(
+        default=None, description="Google AI base URL"
+    )
+
+    ollama_base_url: Optional[str] = Field(
+        default="http://localhost:11434", description="Ollama server URL"
+    )
+    ollama_model: Optional[str] = Field(
+        default="llama2", description="Default Ollama model"
     )
 
     # Tool Configuration

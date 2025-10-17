@@ -11,6 +11,7 @@ from enum import Enum
 
 from .orchestrator import ExecutionPlan
 from src.shared.logging import get_logger
+from src.shared.llm.integration import get_llm_integration
 
 logger = get_logger(__name__)
 
@@ -103,6 +104,7 @@ class PlanningModule:
 
     def __init__(self):
         self._initialized = False
+        self.llm_integration = None
         self.intent_patterns = self._initialize_intent_patterns()
         self.entity_patterns = self._initialize_entity_patterns()
         self.task_templates = self._initialize_task_templates()
@@ -116,6 +118,10 @@ class PlanningModule:
             return
 
         logger.info("Initializing Planning Module")
+
+        # Initialize LLM integration
+        self.llm_integration = await get_llm_integration()
+        logger.info("LLM integration initialized for planning")
 
         # Initialize advanced planning components
         await self._initialize_goal_decomposition()
@@ -226,8 +232,58 @@ class PlanningModule:
     async def _classify_intent_advanced(
         self, message: str, context: ConversationContext
     ) -> IntentType:
-        """Advanced intent classification using patterns and context"""
+        """Advanced intent classification using LLM and patterns"""
 
+        # First try LLM-based classification for better accuracy
+        try:
+            system_prompt = """You are an expert at classifying user intents for a software engineering assistant.
+
+            Classify the user's message into one of these categories:
+            - KNOWLEDGE_RETRIEVAL: User wants to learn about or understand something
+            - CONTENT_GENERATION: User wants to create explanatory content, tutorials, or documentation
+            - CODE_GENERATION: User wants to write, implement, or create code
+            - DOCUMENT_GENERATION: User wants to create formal documents, reports, or exports
+            - ANALYSIS: User wants to analyze, review, or evaluate something
+            - MULTI_STEP: User's request involves multiple sequential tasks
+            - GENERAL_QUERY: Simple questions or general assistance
+
+            Respond with only the category name."""
+
+            # Add context if available
+            context_info = ""
+            if context.current_topic:
+                context_info += f"Current topic: {context.current_topic}\n"
+            if context.message_history:
+                recent_messages = context.message_history[-3:]  # Last 3 messages
+                context_info += "Recent conversation:\n"
+                for msg in recent_messages:
+                    context_info += f"- {msg.get('content', '')[:100]}...\n"
+
+            prompt = f"{context_info}\nUser message: {message}\n\nClassify this intent:"
+
+            classification = await self.llm_integration.generate_response(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=0.1,  # Low temperature for consistent classification
+                max_tokens=50,
+            )
+
+            # Parse LLM response
+            classification = classification.strip().upper()
+            for intent in IntentType:
+                if (
+                    intent.value.upper() in classification
+                    or intent.name in classification
+                ):
+                    logger.info(f"LLM classified intent as: {intent.value}")
+                    return intent
+
+        except Exception as e:
+            logger.warning(
+                f"LLM intent classification failed, falling back to patterns: {str(e)}"
+            )
+
+        # Fallback to pattern-based classification
         message_lower = message.lower()
 
         # Multi-step detection
@@ -238,6 +294,11 @@ class PlanningModule:
             "also",
             "additionally",
             "furthermore",
+            "step by step",
+            "first",
+            "second",
+            "then",
+            "finally",
         ]
         if any(indicator in message_lower for indicator in multi_step_indicators):
             return IntentType.MULTI_STEP
@@ -249,6 +310,8 @@ class PlanningModule:
             "write documentation",
             "export to",
             "save as",
+            "create pdf",
+            "generate report",
         ]
         if any(pattern in message_lower for pattern in doc_patterns):
             return IntentType.DOCUMENT_GENERATION
@@ -261,12 +324,25 @@ class PlanningModule:
             "build class",
             "develop",
             "program",
+            "code",
+            "script",
+            "algorithm",
         ]
         if any(pattern in message_lower for pattern in code_patterns):
             return IntentType.CODE_GENERATION
 
         # Content generation detection
-        content_patterns = ["generate", "create content", "write", "compose", "draft"]
+        content_patterns = [
+            "generate",
+            "create content",
+            "write",
+            "compose",
+            "draft",
+            "explain",
+            "tutorial",
+            "guide",
+            "example",
+        ]
         if any(pattern in message_lower for pattern in content_patterns):
             return IntentType.CONTENT_GENERATION
 
@@ -278,6 +354,11 @@ class PlanningModule:
             "assess",
             "compare",
             "examine",
+            "audit",
+            "inspect",
+            "check",
+            "validate",
+            "critique",
         ]
         if any(pattern in message_lower for pattern in analysis_patterns):
             return IntentType.ANALYSIS
@@ -290,6 +371,11 @@ class PlanningModule:
             "why",
             "tell me about",
             "describe",
+            "define",
+            "clarify",
+            "help me understand",
+            "what are",
+            "how to",
         ]
         if any(pattern in message_lower for pattern in knowledge_patterns):
             return IntentType.KNOWLEDGE_RETRIEVAL
@@ -301,6 +387,7 @@ class PlanningModule:
             ):
                 return IntentType.CODE_GENERATION
 
+        logger.info(f"Classified intent as GENERAL_QUERY for: {message[:50]}...")
         return IntentType.GENERAL_QUERY
 
     async def _extract_entities_advanced(

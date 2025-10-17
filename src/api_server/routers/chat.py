@@ -183,13 +183,29 @@ async def send_message(
     )
 
     try:
-        # TODO: Process message through agent server
-        # For now, return a mock response
+        # Process message through agent server
+        try:
+            from ...agent_server.main import get_agent_server
 
-        # Simulate processing time
-        await asyncio.sleep(0.1)
+            agent_server = await get_agent_server()
 
-        response_text = f"Hello {current_user.full_name or current_user.email}! I'm the SE SME Agent. I received your message: '{message.message[:50]}...'. I'm currently being set up to provide comprehensive software engineering assistance."
+            # Process the message through the integrated agent system
+            agent_response = await agent_server.process_message(
+                message=message.message, session_id=session_id, user_id=current_user.id
+            )
+
+            response_text = agent_response.get(
+                "response",
+                "I apologize, but I couldn't process your message at this time.",
+            )
+
+            # Add metadata from agent response
+            agent_metadata = agent_response.get("metadata", {})
+
+        except Exception as e:
+            logger.error(f"Agent processing failed: {str(e)}")
+            response_text = f"Hello {current_user.full_name or current_user.email}! I'm the SE SME Agent. I'm experiencing some technical difficulties but I'm here to help with software engineering questions. Please try again in a moment."
+            agent_metadata = {"error": True, "error_message": str(e)}
 
         processing_time = (datetime.utcnow() - start_time).total_seconds()
 
@@ -200,9 +216,9 @@ async def send_message(
             timestamp=datetime.utcnow(),
             processing_time=processing_time,
             metadata={
-                "status": "setup_mode",
                 "user_id": current_user.id,
                 "original_message_length": len(message.message),
+                **agent_metadata,
             },
         )
 
@@ -341,11 +357,27 @@ async def handle_chat_message(
     await manager.send_typing_indicator(session_id, True)
 
     try:
-        # TODO: Process message through agent server
-        # Simulate processing
-        await asyncio.sleep(0.5)
+        # Process message through agent server
+        try:
+            from ...agent_server.main import get_agent_server
 
-        response_text = f"WebSocket response to: {message_content[:50]}..."
+            agent_server = await get_agent_server()
+
+            # Process the message through the integrated agent system
+            agent_response = await agent_server.process_message(
+                message=message_content, session_id=session_id, user_id=user_id
+            )
+
+            response_text = agent_response.get(
+                "response",
+                "I apologize, but I couldn't process your message at this time.",
+            )
+            response_metadata = agent_response.get("metadata", {})
+
+        except Exception as e:
+            logger.error(f"Agent processing failed in WebSocket: {str(e)}")
+            response_text = "I'm experiencing some technical difficulties. Please try again in a moment."
+            response_metadata = {"error": True, "error_message": str(e)}
 
         # Send response
         response_message = {
@@ -356,6 +388,7 @@ async def handle_chat_message(
                 "session_id": session_id,
                 "timestamp": datetime.utcnow().isoformat(),
                 "message_type": "agent",
+                "metadata": response_metadata,
             },
             "timestamp": datetime.utcnow().isoformat(),
         }

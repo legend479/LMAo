@@ -1359,23 +1359,104 @@ class AdaptiveContentGenerator:
         # Generate prompt
         generated_prompt = await self.prompt_framework.generate_prompt(prompt_request)
 
-        # For now, return a placeholder content
-        # In a real implementation, this would call an LLM with the generated prompt
-        placeholder_content = f"""
-{request.topic}
+        # Generate content using LLM integration
+        try:
+            from src.shared.llm.integration import get_llm_integration
+
+            llm_integration = await get_llm_integration()
+
+            # Create system prompt for content generation
+            system_prompt = f"""You are an expert technical content creator specializing in software engineering.
+            Create high-quality {request.content_type.value} content about {request.topic} for {request.target_audience.level.value} level audience.
+
+            Guidelines:
+            - Be accurate and technically precise
+            - Use appropriate examples and analogies for the audience level
+            - Structure content clearly with headings and bullet points
+            - Include practical applications and real-world examples
+            - Maintain appropriate technical depth for {request.target_audience.level.value} level
+            - Make content engaging and easy to follow
+            - Include code examples when relevant
+            """
+
+            # Build the prompt with all requirements
+            prompt_parts = [
+                f"Create {request.content_type.value} content about: {request.topic}"
+            ]
+
+            if request.context:
+                prompt_parts.append(f"\nContext: {request.context}")
+
+            # Add audience-specific requirements
+            audience_requirements = []
+            if request.target_audience.level.value == "beginner":
+                audience_requirements.append("Explain fundamental concepts clearly")
+                audience_requirements.append("Avoid complex jargon without explanation")
+                audience_requirements.append("Include step-by-step guidance")
+            elif request.target_audience.level.value == "intermediate":
+                audience_requirements.append(
+                    "Assume basic knowledge but explain advanced concepts"
+                )
+                audience_requirements.append("Include practical examples and use cases")
+                audience_requirements.append(
+                    "Connect to broader software engineering principles"
+                )
+            elif request.target_audience.level.value == "advanced":
+                audience_requirements.append(
+                    "Focus on advanced concepts and edge cases"
+                )
+                audience_requirements.append(
+                    "Include performance considerations and trade-offs"
+                )
+                audience_requirements.append(
+                    "Reference industry best practices and standards"
+                )
+
+            if audience_requirements:
+                prompt_parts.append("\nAudience-specific requirements:")
+                for req in audience_requirements:
+                    prompt_parts.append(f"- {req}")
+
+            if request.constraints:
+                prompt_parts.append("\nConstraints:")
+                for constraint in request.constraints:
+                    prompt_parts.append(f"- {constraint}")
+
+            prompt = "\n".join(prompt_parts)
+
+            # Generate content using LLM
+            generated_content = await llm_integration.generate_response(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=0.7,  # Higher temperature for more creative content
+                max_tokens=2500,
+            )
+
+            return generated_content
+
+        except Exception as e:
+            logger.error(f"LLM content generation failed: {str(e)}")
+            # Fallback to placeholder content
+            placeholder_content = f"""
+# {request.topic}
 
 This is a comprehensive explanation of {request.topic} tailored for {request.target_audience.level.value} level audience.
 
-Key concepts include:
-- Fundamental principles
-- Practical applications
-- Best practices
-- Common challenges
+## Key Concepts
 
-The content is designed to be appropriate for the target audience's technical background and learning preferences.
-        """.strip()
+- Fundamental principles and core concepts
+- Practical applications in software engineering
+- Best practices and industry standards
+- Common challenges and how to address them
 
-        return placeholder_content
+## Context
+
+{request.context if request.context else "This content covers essential aspects of the topic with practical examples and real-world applications."}
+
+*Note: Content generation encountered an issue ({str(e)}), showing template content.*
+            """.strip()
+
+            return placeholder_content
 
     async def _determine_transformations(
         self, analysis: ContentAnalysis, target_audience: AudienceProfile

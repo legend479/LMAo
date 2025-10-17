@@ -30,10 +30,34 @@ dev:
 	@echo "Starting development environment..."
 	docker-compose up -d postgres redis elasticsearch
 	@echo "Waiting for services to be ready..."
-	sleep 10
+	sleep 15
+	@echo "Services started. You can now run:"
+	@echo "  make dev-api    - Start API server"
+	@echo "  make dev-ui     - Start UI server"
+	@echo "  make dev-all    - Start all development servers"
+
+# Start API server in development
+dev-api:
 	@echo "Starting API server..."
-	python -m uvicorn src.api_server.main:app --reload --host 0.0.0.0 --port 8000 &
+	python -m uvicorn src.api_server.main:app --reload --host 0.0.0.0 --port 8000
+
+# Start UI in development
+dev-ui:
 	@echo "Starting UI development server..."
+	cd ui && REACT_APP_SIMPLE_MODE=true npm start
+
+# Start UI in full mode
+dev-ui-full:
+	@echo "Starting UI development server (full mode)..."
+	cd ui && REACT_APP_SIMPLE_MODE=false npm start
+
+# Start all development servers
+dev-all:
+	@echo "Starting all development servers..."
+	make dev
+	@echo "Starting API server in background..."
+	python -m uvicorn src.api_server.main:app --reload --host 0.0.0.0 --port 8000 &
+	@echo "Starting UI server..."
 	cd ui && npm start
 
 # Build all services
@@ -66,7 +90,7 @@ clean:
 # Docker commands
 docker-build:
 	@echo "Building Docker images..."
-	docker-compose build
+	docker-compose build --no-cache
 
 docker-up:
 	@echo "Starting Docker services..."
@@ -74,11 +98,28 @@ docker-up:
 
 docker-down:
 	@echo "Stopping Docker services..."
-	docker-compose down
+	docker-compose down -v
+
+docker-restart:
+	@echo "Restarting Docker services..."
+	docker-compose down -v
+	docker-compose up -d
 
 docker-logs:
 	@echo "Viewing Docker logs..."
 	docker-compose logs -f
+
+docker-logs-api:
+	@echo "Viewing API server logs..."
+	docker-compose logs -f api-server
+
+docker-logs-agent:
+	@echo "Viewing Agent server logs..."
+	docker-compose logs -f agent-server
+
+docker-logs-rag:
+	@echo "Viewing RAG pipeline logs..."
+	docker-compose logs -f rag-pipeline
 
 # Development utilities
 format:
@@ -132,3 +173,46 @@ restore:
 	@echo "Restoring from backup..."
 	@read -p "Enter backup file path: " backup_file; \
 	docker-compose exec -T postgres psql -U postgres se_sme_agent < $$backup_file
+
+# Quick setup for new developers
+setup:
+	@echo "Setting up SE SME Agent for development..."
+	@echo "1. Installing Python dependencies..."
+	pip install -r requirements-dev.txt
+	@echo "2. Installing UI dependencies..."
+	cd ui && npm install
+	@echo "3. Setting up environment file..."
+	cp .env.example .env
+	@echo "4. Setting up pre-commit hooks..."
+	pre-commit install
+	@echo "5. Building Docker images..."
+	docker-compose build
+	@echo ""
+	@echo "Setup complete! Next steps:"
+	@echo "  1. Edit .env file with your configuration"
+	@echo "  2. Run 'make docker-up' to start all services"
+	@echo "  3. Run 'make test' to verify everything works"
+	@echo "  4. Visit http://localhost:8000/docs for API documentation"
+	@echo "  5. Visit http://localhost:3000 for the web interface"
+
+# Check system requirements
+check-requirements:
+	@echo "Checking system requirements..."
+	@python --version || echo "❌ Python not found"
+	@node --version || echo "❌ Node.js not found"
+	@docker --version || echo "❌ Docker not found"
+	@docker-compose --version || echo "❌ Docker Compose not found"
+	@echo "✅ Requirements check complete"
+
+# Full system test
+test-system:
+	@echo "Running full system test..."
+	@echo "1. Testing API server..."
+	curl -f http://localhost:8000/health || echo "❌ API server not responding"
+	@echo "2. Testing Agent server..."
+	curl -f http://localhost:8001/health || echo "❌ Agent server not responding"
+	@echo "3. Testing RAG pipeline..."
+	curl -f http://localhost:8002/health || echo "❌ RAG pipeline not responding"
+	@echo "4. Testing UI..."
+	curl -f http://localhost:3000 || echo "❌ UI not responding"
+	@echo "✅ System test complete"

@@ -32,4 +32,4 @@ USER app
 EXPOSE 8002
 
 # Run the RAG pipeline
-CMD ["python", "-c", "import asyncio; from src.rag_pipeline.main import rag_pipeline; asyncio.run(rag_pipeline.initialize()); print('RAG Pipeline running...'); asyncio.get_event_loop().run_forever()"]
+CMD ["python", "-m", "uvicorn", "src.rag_pipeline.main:app", "--host", "0.0.0.0", "--port", "8002"]

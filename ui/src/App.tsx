@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 import { Provider } from 'react-redux';
@@ -9,6 +9,9 @@ import { store, persistor } from './store/store';
 import { RootState } from './store/store';
 import AppRouter from './routes/AppRouter';
 import LoadingSpinner from './components/common/LoadingSpinner';
+
+// Simple fallback component for development/testing
+import SimpleChatApp from './components/SimpleChatApp';
 
 const ThemeWrapper: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const themeMode = useSelector((state: RootState) => state.ui.theme);
@@ -58,7 +61,21 @@ const ThemeWrapper: React.FC<{ children: React.ReactNode }> = ({ children }) => 
   );
 };
 
+// Environment variable to switch between simple and full app
+const USE_SIMPLE_APP = process.env.REACT_APP_SIMPLE_MODE === 'true';
+
 function App() {
+  // For development/testing, provide a simple fallback
+  if (USE_SIMPLE_APP) {
+    return (
+      <ThemeProvider theme={createTheme({ palette: { mode: 'dark' } })}>
+        <CssBaseline />
+        <SimpleChatApp />
+      </ThemeProvider>
+    );
+  }
+
+  // Full application with Redux and routing
   return (
     <Provider store={store}>
       <PersistGate loading={<LoadingSpinner fullScreen message="Loading application..." />} persistor={persistor}>

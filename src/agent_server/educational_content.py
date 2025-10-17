@@ -288,11 +288,83 @@ class QuizGenerator:
         # Generate prompt
         generated_prompt = await self.prompt_framework.generate_prompt(prompt_request)
 
-        # For now, use template-based generation
-        # In a real implementation, this would call an LLM with the generated prompt
-        question_data = await self._generate_question_from_template(
-            topic, audience_level, difficulty, question_type
-        )
+        # Generate question using LLM integration
+        try:
+            from src.shared.llm.integration import get_llm_integration
+
+            llm_integration = await get_llm_integration()
+
+            # Create system prompt for question generation
+            system_prompt = f"""You are an expert educational content creator specializing in software engineering.
+            Generate high-quality {question_type.value} questions about {topic} for {audience_level.value} level learners.
+
+            Guidelines:
+            - Create questions that test understanding, not just memorization
+            - Ensure questions are appropriate for {audience_level.value} level
+            - Include clear, unambiguous wording
+            - For multiple choice: provide 4 options with only one correct answer
+            - For coding questions: include specific requirements and expected output
+            - For essay questions: provide clear evaluation criteria
+            - Make questions practical and relevant to real-world scenarios
+            """
+
+            # Build the prompt based on question type
+            if question_type.value == "multiple_choice":
+                prompt = f"""Generate a multiple choice question about {topic} for {audience_level.value} level.
+
+                Format:
+                Question: [Your question here]
+                A) [Option A]
+                B) [Option B] 
+                C) [Option C]
+                D) [Option D]
+                Correct Answer: [A/B/C/D]
+                Explanation: [Brief explanation of why this is correct]
+                
+                Difficulty: {difficulty.value}
+                """
+            elif question_type.value == "coding":
+                prompt = f"""Generate a coding question about {topic} for {audience_level.value} level.
+
+                Format:
+                Problem: [Clear problem statement]
+                Requirements: [Specific requirements and constraints]
+                Input: [Expected input format]
+                Output: [Expected output format]
+                Example: [Sample input/output]
+                Difficulty: {difficulty.value}
+                """
+            else:  # essay or short_answer
+                prompt = f"""Generate an {question_type.value.replace('_', ' ')} question about {topic} for {audience_level.value} level.
+
+                Format:
+                Question: [Your question here]
+                Key Points: [Main points that should be covered in the answer]
+                Evaluation Criteria: [How to evaluate the answer]
+                Difficulty: {difficulty.value}
+                """
+
+            # Generate question using LLM
+            generated_question = await llm_integration.generate_response(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=0.6,  # Balanced creativity for question generation
+                max_tokens=1000,
+            )
+
+            # Parse the generated question into structured data
+            question_data = self._parse_generated_question(
+                generated_question, question_type
+            )
+
+            return question_data
+
+        except Exception as e:
+            logger.error(f"LLM question generation failed: {str(e)}")
+            # Fallback to template-based generation
+            question_data = await self._generate_question_from_template(
+                topic, audience_level, difficulty, question_type
+            )
 
         return QuizQuestion(
             question_id=question_id,
@@ -361,6 +433,115 @@ class QuizGenerator:
                 "question": f"Describe {topic}.",
                 "correct_answer": f"A description of {topic}.",
                 "explanation": f"This question tests knowledge of {topic}.",
+            }
+
+    def _parse_generated_question(
+        self, generated_text: str, question_type: QuestionType
+    ) -> Dict[str, Any]:
+        """Parse LLM-generated question text into structured data"""
+
+        try:
+            lines = generated_text.strip().split("\n")
+            result = {}
+
+            if question_type == QuestionType.MULTIPLE_CHOICE:
+                # Parse multiple choice format
+                for line in lines:
+                    line = line.strip()
+                    if line.startswith("Question:"):
+                        result["question"] = line.replace("Question:", "").strip()
+                    elif line.startswith(("A)", "B)", "C)", "D)")):
+                        if "options" not in result:
+                            result["options"] = []
+                        result["options"].append(line.strip())
+                    elif line.startswith("Correct Answer:"):
+                        result["correct_answer"] = line.replace(
+                            "Correct Answer:", ""
+                        ).strip()
+                    elif line.startswith("Explanation:"):
+                        result["explanation"] = line.replace("Explanation:", "").strip()
+
+            elif question_type == QuestionType.CODING:
+                # Parse coding question format
+                current_section = None
+                for line in lines:
+                    line = line.strip()
+                    if line.startswith("Problem:"):
+                        result["question"] = line.replace("Problem:", "").strip()
+                        current_section = "problem"
+                    elif line.startswith("Requirements:"):
+                        result["requirements"] = line.replace(
+                            "Requirements:", ""
+                        ).strip()
+                        current_section = "requirements"
+                    elif line.startswith("Input:"):
+                        result["input_format"] = line.replace("Input:", "").strip()
+                        current_section = "input"
+                    elif line.startswith("Output:"):
+                        result["output_format"] = line.replace("Output:", "").strip()
+                        current_section = "output"
+                    elif line.startswith("Example:"):
+                        result["example"] = line.replace("Example:", "").strip()
+                        current_section = "example"
+                    elif (
+                        current_section
+                        and line
+                        and not line.startswith(
+                            (
+                                "Problem:",
+                                "Requirements:",
+                                "Input:",
+                                "Output:",
+                                "Example:",
+                                "Difficulty:",
+                            )
+                        )
+                    ):
+                        # Continue previous section
+                        if current_section == "problem":
+                            result["question"] = result.get("question", "") + " " + line
+                        elif current_section == "requirements":
+                            result["requirements"] = (
+                                result.get("requirements", "") + " " + line
+                            )
+                        elif current_section == "example":
+                            result["example"] = result.get("example", "") + " " + line
+
+            else:  # essay or short_answer
+                # Parse essay/short answer format
+                for line in lines:
+                    line = line.strip()
+                    if line.startswith("Question:"):
+                        result["question"] = line.replace("Question:", "").strip()
+                    elif line.startswith("Key Points:"):
+                        result["key_points"] = line.replace("Key Points:", "").strip()
+                    elif line.startswith("Evaluation Criteria:"):
+                        result["evaluation_criteria"] = line.replace(
+                            "Evaluation Criteria:", ""
+                        ).strip()
+
+            # Ensure we have at least a question
+            if "question" not in result:
+                # Try to extract the first meaningful line as the question
+                for line in lines:
+                    if line.strip() and not line.startswith(
+                        ("Format:", "Difficulty:", "Guidelines:")
+                    ):
+                        result["question"] = line.strip()
+                        break
+
+            return result
+
+        except Exception as e:
+            logger.error(f"Failed to parse generated question: {str(e)}")
+            # Return a basic structure
+            return {
+                "question": (
+                    generated_text[:200] + "..."
+                    if len(generated_text) > 200
+                    else generated_text
+                ),
+                "explanation": "Generated question (parsing failed)",
             }
 
     def _determine_learning_objective(

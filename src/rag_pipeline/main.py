@@ -399,3 +399,125 @@ async def get_rag_pipeline() -> RAGPipeline:
     if not rag_pipeline._initialized:
         await rag_pipeline.initialize()
     return rag_pipeline
+
+
+# FastAPI application for HTTP endpoints
+from fastapi import FastAPI, HTTPException, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
+from typing import Dict, Any, List
+
+app = FastAPI(
+    title="SE SME Agent - RAG Pipeline",
+    description="Document processing and retrieval service",
+    version="1.0.0",
+)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize RAG pipeline on startup"""
+    await rag_pipeline.initialize()
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cleanup on shutdown"""
+    await rag_pipeline.shutdown()
+
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    health = await rag_pipeline.health_check()
+    return health
+
+
+@app.post("/ingest")
+async def ingest_document(file: UploadFile = File(...), metadata: str = "{}"):
+    """Ingest a document"""
+    try:
+        import json
+        import tempfile
+        import os
+
+        # Save uploaded file temporarily
+        with tempfile.NamedTemporaryFile(
+            delete=False, suffix=f"_{file.filename}"
+        ) as tmp_file:
+            content = await file.read()
+            tmp_file.write(content)
+            tmp_file_path = tmp_file.name
+
+        try:
+            # Parse metadata
+            metadata_dict = json.loads(metadata) if metadata else {}
+
+            # Ingest document
+            result = await rag_pipeline.ingest_document(tmp_file_path, metadata_dict)
+            return result
+        finally:
+            # Clean up temporary file
+            if os.path.exists(tmp_file_path):
+                os.unlink(tmp_file_path)
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/search")
+async def search_documents(request: Dict[str, Any]):
+    """Search documents"""
+    try:
+        query = request.get("query", "")
+        filters = request.get("filters", {})
+        max_results = request.get("max_results", 10)
+        search_type = request.get("search_type", "hybrid")
+
+        result = await rag_pipeline.search(query, filters, max_results, search_type)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/stats")
+async def get_document_stats():
+    """Get document statistics"""
+    try:
+        stats = await rag_pipeline.get_document_stats()
+        return stats
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/documents/{document_id}")
+async def delete_document(document_id: str):
+    """Delete a document"""
+    try:
+        success = await rag_pipeline.delete_document(document_id)
+        return {"success": success, "document_id": document_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/metrics")
+async def get_metrics():
+    """Get service metrics"""
+    try:
+        stats = await rag_pipeline.get_document_stats()
+        return {
+            "service": "rag-pipeline",
+            "status": "healthy",
+            "initialized": rag_pipeline._initialized,
+            "stats": stats,
+        }
+    except Exception as e:
+        return {"service": "rag-pipeline", "status": "error", "error": str(e)}
