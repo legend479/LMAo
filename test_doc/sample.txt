@@ -1,0 +1,45 @@
+Software Engineering Best Practices
+
+This document outlines key software engineering best practices that every developer should follow.
+
+## Code Quality
+
+Writing clean, maintainable code is essential for long-term project success. Here are some key principles:
+
+1. Use meaningful variable and function names
+2. Keep functions small and focused on a single responsibility
+3. Write comprehensive unit tests
+4. Follow consistent coding standards
+5. Document your code appropriately
+
+## Version Control
+
+Version control is crucial for collaborative development:
+
+- Use Git for version control
+- Write clear, descriptive commit messages
+- Use branching strategies like Git Flow
+- Regularly merge changes to avoid conflicts
+- Tag releases appropriately
+
+## Testing
+
+A robust testing strategy includes:
+
+- Unit tests for individual components
+- Integration tests for system interactions
+- End-to-end tests for user workflows
+- Performance tests for scalability
+- Security tests for vulnerability assessment
+
+## Documentation
+
+Good documentation should include:
+
+- README files with setup instructions
+- API documentation with examples
+- Architecture diagrams
+- User guides and tutorials
+- Troubleshooting guides
+
+This is a sample document for testing the document ingestion pipeline.

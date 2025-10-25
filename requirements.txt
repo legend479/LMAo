@@ -1,0 +1,23 @@
+# Core RAG framework
+llama-index~=0.10.40
+
+# Document Loaders (PDF, DOCX, PPTX, etc.)
+llama-index-readers-file~=0.1.24
+unstructured[pdf,docx,pptx]~=0.14.8
+
+# Embedding Models
+llama-index-embeddings-huggingface~=0.2.0
+# CORRECTED: Downgraded to a version compatible with llama-index
+sentence-transformers~=2.7.0
+
+# Vector DB
+llama-index-vector-stores-chroma~=0.1.9
+chromadb~=0.5.3
+
+# Bonus Reranker
+llama-index-postprocessor-flag-embedding-reranker~=0.4.1
+FlagEmbedding~=1.2.9
+
+# Core dependencies for transformers and unstructured
+torch~=2.3.1
+transformers~=4.41.2
