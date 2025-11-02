@@ -201,7 +201,7 @@ class ToolDatabase:
 
                 # Convert complex objects to JSON
                 capabilities_json = (
-                    json.dumps(asdict(metadata.capabilities))
+                    json.dumps(self._serialize_capabilities(metadata.capabilities))
                     if metadata.capabilities
                     else None
                 )
@@ -388,6 +388,19 @@ class ToolDatabase:
         except Exception as e:
             logger.error("Failed to record execution", tool_id=tool_id, error=str(e))
 
+    def _serialize_capabilities(self, capabilities: ToolCapabilities) -> Dict[str, Any]:
+        """Serialize ToolCapabilities to JSON-serializable dict"""
+        return {
+            "primary_capability": capabilities.primary_capability.value,
+            "secondary_capabilities": [
+                cap.value for cap in capabilities.secondary_capabilities
+            ],
+            "input_types": capabilities.input_types,
+            "output_types": capabilities.output_types,
+            "supported_formats": capabilities.supported_formats,
+            "language_support": capabilities.language_support,
+        }
+
     def _row_to_metadata(self, row) -> ToolMetadata:
         """Convert database row to ToolMetadata object"""
 
@@ -507,6 +520,9 @@ class ToolRegistryManager:
             capabilities = tool.get_capabilities()
             resource_requirements = tool.get_resource_requirements()
 
+            # Create performance metrics placeholder
+            performance_metrics = PerformanceMetrics()
+
             # Create metadata
             metadata = ToolMetadata(
                 id=tool_id,
@@ -522,6 +538,9 @@ class ToolRegistryManager:
                 dependencies=self._extract_dependencies(code),
                 capabilities=capabilities,
                 resource_requirements=resource_requirements,
+                performance_metrics=performance_metrics,
+                parameters=schema.get("parameters", {}),
+                required_params=schema.get("required_params", []),
                 schema=schema,
                 validation_score=validation_score,
             )
