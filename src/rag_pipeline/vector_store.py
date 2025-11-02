@@ -10,7 +10,7 @@ from datetime import datetime
 from elasticsearch import AsyncElasticsearch
 from elasticsearch.exceptions import NotFoundError
 
-from .document_processor import ProcessedDocument
+from .models import ProcessedDocument
 from ..shared.logging import get_logger
 
 logger = get_logger(__name__)
@@ -575,8 +575,17 @@ class ElasticsearchStore:
 
         # Add filters (similar to hybrid search)
         if filters:
-            # Implementation similar to hybrid search filters
-            pass
+            filter_clauses = []
+            for key, value in filters.items():
+                if isinstance(value, list):
+                    filter_clauses.append({"terms": {f"metadata.{key}": value}})
+                else:
+                    filter_clauses.append({"term": {f"metadata.{key}": value}})
+
+            if filter_clauses:
+                search_body["query"] = {
+                    "bool": {"must": [search_body["query"]], "filter": filter_clauses}
+                }
 
         start_time = datetime.utcnow()
         response = await self.client.search(

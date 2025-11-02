@@ -9,10 +9,8 @@ from dataclasses import dataclass
 from datetime import datetime
 import json
 
-from .document_processor import (
-    DocumentProcessor,
-    ProcessedDocument,
-)
+from .document_processor import DocumentProcessor
+from .models import ProcessedDocument
 from src.shared.logging import get_logger
 
 logger = get_logger(__name__)

@@ -5,11 +5,7 @@ Specialized retrieval system optimized for software engineering content
 
 from typing import Dict, Any, List, Optional
 
-from .document_processor import DocumentProcessor
-from .document_ingestion import DocumentIngestionService, IngestionConfig
-from .vector_store import ElasticsearchStore, ElasticsearchConfig
-from .search_engine import HybridSearchEngine, SearchConfig
-from .embedding_manager import EmbeddingManager, EmbeddingConfig
+from .models import ProcessedDocument, IngestionResult, Chunk, DocumentMetadata
 from src.shared.config import get_settings
 from src.shared.logging import get_logger
 
@@ -21,59 +17,94 @@ class RAGPipeline:
 
     def __init__(
         self,
-        ingestion_config: Optional[IngestionConfig] = None,
-        elasticsearch_config: Optional[ElasticsearchConfig] = None,
-        search_config: Optional[SearchConfig] = None,
-        embedding_config: Optional[EmbeddingConfig] = None,
+        ingestion_config: Optional[Dict[str, Any]] = None,
+        elasticsearch_config: Optional[Dict[str, Any]] = None,
+        search_config: Optional[Dict[str, Any]] = None,
+        embedding_config: Optional[Dict[str, Any]] = None,
     ):
         self.settings = get_settings()
 
-        # Create default configs if not provided
-        if ingestion_config is None:
-            ingestion_config = IngestionConfig(
-                source_directories=[],
-                supported_extensions=[".pdf", ".docx", ".pptx", ".txt", ".md"],
-                max_file_size_mb=100,
-                max_concurrent_files=5,
-            )
+        # Store configs for lazy initialization
+        self.ingestion_config = ingestion_config
+        self.elasticsearch_config = elasticsearch_config
+        self.search_config = search_config
+        self.embedding_config = embedding_config
 
-        if elasticsearch_config is None:
-            elasticsearch_config = ElasticsearchConfig()
-
-        if search_config is None:
-            search_config = SearchConfig()
-
-        if embedding_config is None:
-            embedding_config = EmbeddingConfig()
-
-        # Initialize components
-        self.document_processor = DocumentProcessor()
-        self.embedding_manager = EmbeddingManager(embedding_config)
-        self.ingestion_service = DocumentIngestionService(ingestion_config)
-        self.vector_store = ElasticsearchStore(
-            elasticsearch_config, self.embedding_manager
-        )
-        self.search_engine = HybridSearchEngine(
-            self.vector_store, self.embedding_manager, search_config
-        )
+        # Components will be initialized lazily
+        self.document_processor = None
+        self.embedding_manager = None
+        self.ingestion_service = None
+        self.vector_store = None
+        self.search_engine = None
         self._initialized = False
 
     async def initialize(self):
-        """Initialize RAG pipeline components"""
+        """Initialize RAG pipeline components with lazy imports"""
         if self._initialized:
             return
 
         logger.info("Initializing RAG Pipeline")
 
-        # Initialize components in order
-        await self.document_processor.initialize()
-        await self.embedding_manager.initialize()
-        await self.vector_store.initialize()
-        await self.search_engine.initialize()
-        await self.ingestion_service.initialize()
+        try:
+            # Lazy imports to avoid circular dependencies
+            from .document_processor import DocumentProcessor
+            from .document_ingestion import DocumentIngestionService, IngestionConfig
+            from .vector_store import ElasticsearchStore, ElasticsearchConfig
+            from .search_engine import HybridSearchEngine, SearchConfig
+            from .embedding_manager import EmbeddingManager, EmbeddingConfig
 
-        self._initialized = True
-        logger.info("RAG Pipeline initialized successfully")
+            # Create default configs if not provided
+            if self.ingestion_config is None:
+                self.ingestion_config = IngestionConfig(
+                    source_directories=[],
+                    supported_extensions=[".pdf", ".docx", ".pptx", ".txt", ".md"],
+                    max_file_size_mb=100,
+                    max_concurrent_files=5,
+                )
+            elif isinstance(self.ingestion_config, dict):
+                self.ingestion_config = IngestionConfig(**self.ingestion_config)
+
+            if self.elasticsearch_config is None:
+                self.elasticsearch_config = ElasticsearchConfig()
+            elif isinstance(self.elasticsearch_config, dict):
+                self.elasticsearch_config = ElasticsearchConfig(
+                    **self.elasticsearch_config
+                )
+
+            if self.search_config is None:
+                self.search_config = SearchConfig()
+            elif isinstance(self.search_config, dict):
+                self.search_config = SearchConfig(**self.search_config)
+
+            if self.embedding_config is None:
+                self.embedding_config = EmbeddingConfig()
+            elif isinstance(self.embedding_config, dict):
+                self.embedding_config = EmbeddingConfig(**self.embedding_config)
+
+            # Initialize components
+            self.document_processor = DocumentProcessor()
+            self.embedding_manager = EmbeddingManager(self.embedding_config)
+            self.ingestion_service = DocumentIngestionService(self.ingestion_config)
+            self.vector_store = ElasticsearchStore(
+                self.elasticsearch_config, self.embedding_manager
+            )
+            self.search_engine = HybridSearchEngine(
+                self.vector_store, self.embedding_manager, self.search_config
+            )
+
+            # Initialize components in order
+            await self.document_processor.initialize()
+            await self.embedding_manager.initialize()
+            await self.vector_store.initialize()
+            await self.search_engine.initialize()
+            await self.ingestion_service.initialize()
+
+            self._initialized = True
+            logger.info("RAG Pipeline initialized successfully")
+
+        except Exception as e:
+            logger.error("Failed to initialize RAG Pipeline", error=str(e))
+            raise
 
     async def ingest_document(
         self, file_path: str, metadata: Dict[str, Any] = None
@@ -331,26 +362,68 @@ class RAGPipeline:
         health_status = {"pipeline": "healthy", "components": {}}
 
         try:
+            # Initialize if not already done
+            if not self._initialized:
+                await self.initialize()
+
             # Check all components
-            health_status["components"][
-                "document_processor"
-            ] = await self.document_processor.health_check()
-            health_status["components"][
-                "embedding_manager"
-            ] = await self.embedding_manager.health_check()
-            health_status["components"][
-                "vector_store"
-            ] = await self.vector_store.health_check()
-            health_status["components"][
-                "search_engine"
-            ] = await self.search_engine.health_check()
+            if self.document_processor:
+                health_status["components"][
+                    "document_processor"
+                ] = await self.document_processor.health_check()
+            else:
+                health_status["components"]["document_processor"] = {
+                    "status": "not_initialized"
+                }
+
+            if self.embedding_manager:
+                health_status["components"][
+                    "embedding_manager"
+                ] = await self.embedding_manager.health_check()
+            else:
+                health_status["components"]["embedding_manager"] = {
+                    "status": "not_initialized"
+                }
+
+            if self.vector_store:
+                health_status["components"][
+                    "vector_store"
+                ] = await self.vector_store.health_check()
+            else:
+                health_status["components"]["vector_store"] = {
+                    "status": "not_initialized"
+                }
+
+            if self.search_engine:
+                health_status["components"][
+                    "search_engine"
+                ] = await self.search_engine.health_check()
+            else:
+                health_status["components"]["search_engine"] = {
+                    "status": "not_initialized"
+                }
 
             # Check ingestion service
-            ingestion_status = await self.ingestion_service.get_ingestion_status()
-            health_status["components"]["ingestion_service"] = {
-                "status": "healthy",
-                "ingested_files_count": ingestion_status["ingested_files_count"],
-            }
+            if self.ingestion_service:
+                try:
+                    ingestion_status = (
+                        await self.ingestion_service.get_ingestion_status()
+                    )
+                    health_status["components"]["ingestion_service"] = {
+                        "status": "healthy",
+                        "ingested_files_count": ingestion_status.get(
+                            "ingested_files_count", 0
+                        ),
+                    }
+                except Exception as e:
+                    health_status["components"]["ingestion_service"] = {
+                        "status": "error",
+                        "error": str(e),
+                    }
+            else:
+                health_status["components"]["ingestion_service"] = {
+                    "status": "not_initialized"
+                }
 
             # Overall health assessment
             component_statuses = []

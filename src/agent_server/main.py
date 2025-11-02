@@ -9,7 +9,7 @@ from datetime import datetime
 from .orchestrator import LangGraphOrchestrator
 from .planning import PlanningModule
 from .memory import MemoryManager
-from .tools.registry import ToolRegistry
+from .tools.registry import ToolExecutionRegistry
 from src.shared.config import get_settings
 from src.shared.logging import get_logger
 
@@ -24,7 +24,7 @@ class AgentServer:
         self.orchestrator = LangGraphOrchestrator()
         self.planning_module = PlanningModule()
         self.memory_manager = MemoryManager()
-        self.tool_registry = ToolRegistry()
+        self.tool_registry = ToolExecutionRegistry()
         self._initialized = False
 
     async def initialize(self):

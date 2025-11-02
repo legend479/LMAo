@@ -4,7 +4,7 @@ Centralized configuration using environment variables and config files
 """
 
 from pydantic_settings import BaseSettings
-from pydantic import Field
+from pydantic import Field, ConfigDict
 from typing import List, Optional
 import os
 from functools import lru_cache
@@ -141,10 +141,9 @@ class Settings(BaseSettings):
     enable_metrics: bool = Field(default=True, description="Enable metrics collection")
     metrics_port: int = Field(default=9090, description="Metrics server port")
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = False
+    model_config = ConfigDict(
+        env_file=".env", env_file_encoding="utf-8", case_sensitive=False
+    )
 
 
 class DevelopmentSettings(Settings):

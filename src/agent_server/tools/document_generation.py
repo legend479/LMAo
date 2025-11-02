@@ -553,7 +553,7 @@ class DocumentValidator:
             else:
                 metrics["file_exists"] = True
 
-                # Additional PDF-specific validation would require PyPDF2 or similar
+                # Additional PDF-specific validation would require pypdf or similar
                 warnings.append(
                     "PDF content validation limited - additional dependencies needed"
                 )

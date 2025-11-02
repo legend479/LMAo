@@ -12,14 +12,23 @@ import asyncio
 import mimetypes
 
 # Document processing libraries
-import PyPDF2
+import pypdf
 from docx import Document as DocxDocument
 from pptx import Presentation
 
-from .chunking_strategies import ChunkingManager, ChunkingConfig
+from .models import (
+    Chunk,
+    DocumentMetadata,
+    ProcessedDocument,
+    DocumentType,
+    ChunkingConfig,
+)
 from src.shared.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Forward declaration for chunking manager - will be imported when needed
+ChunkingManager = None
 
 
 @dataclass
@@ -67,22 +76,6 @@ class Chunk:
 
 
 @dataclass
-class ProcessedDocument:
-    document_id: str
-    original_path: str
-    content: str
-    chunks: List[Chunk]
-    metadata: DocumentMetadata
-    processing_time: float
-    content_hash: str
-    processing_errors: List[str] = None
-
-    def __post_init__(self):
-        if self.processing_errors is None:
-            self.processing_errors = []
-
-
-@dataclass
 class BatchProcessingResult:
     """Result of batch document processing"""
 
@@ -105,11 +98,16 @@ class DocumentProcessor:
         self.supported_formats = [".pdf", ".docx", ".pptx", ".txt", ".md"]
 
         # Initialize chunking system
-        self.chunking_config = chunking_config or ChunkingConfig()
+        self.chunking_config = chunking_config or ChunkingConfig(
+            strategy="hierarchical"
+        )
+        # Lazy import to avoid circular dependency
+        from .chunking_strategies import ChunkingManager
+
         self.chunking_manager = ChunkingManager(self.chunking_config)
 
         # Legacy chunk sizes for backward compatibility
-        self.chunk_sizes = self.chunking_config.chunk_sizes
+        self.chunk_sizes = self.chunking_config.chunk_size
 
         self._initialized = False
         self._processed_documents = {}  # Cache for deduplication
@@ -127,8 +125,37 @@ class DocumentProcessor:
 
         logger.info("Initializing Document Processor")
 
-        # TODO: Initialize document parsing libraries
-        # This will be implemented when specific parsers are added
+        try:
+            # Initialize document parsing libraries
+            # Verify required libraries are available
+            import PyPDF2
+            import docx
+            import pptx
+
+            logger.info("Document parsing libraries verified")
+
+            # Initialize chunking manager with lazy import
+            from .chunking_strategies import ChunkingManager
+
+            if not hasattr(self, "chunking_manager") or self.chunking_manager is None:
+                self.chunking_manager = ChunkingManager(self.chunking_config)
+
+            # Initialize processing statistics
+            self._processing_stats = {
+                "documents_processed": 0,
+                "total_chunks_created": 0,
+                "processing_errors": 0,
+                "last_processed": None,
+            }
+
+            logger.info("Document parsing libraries and chunking manager initialized")
+
+        except ImportError as e:
+            logger.warning(f"Some document parsing libraries not available: {e}")
+            # Continue initialization - we can still process some document types
+        except Exception as e:
+            logger.error(f"Error initializing document processor: {e}")
+            raise
 
         self._initialized = True
         logger.info("Document Processor initialized")
@@ -408,7 +435,7 @@ class DocumentProcessor:
             metadata_dict = {}
 
             with open(file_path, "rb") as file:
-                pdf_reader = PyPDF2.PdfReader(file)
+                pdf_reader = pypdf.PdfReader(file)
 
                 # Extract text from all pages
                 for page_num, page in enumerate(pdf_reader.pages):
@@ -621,6 +648,9 @@ class DocumentProcessor:
     def update_chunking_config(self, config: ChunkingConfig):
         """Update chunking configuration"""
         self.chunking_config = config
+        # Lazy import to avoid circular dependency
+        from .chunking_strategies import ChunkingManager
+
         self.chunking_manager = ChunkingManager(config)
         self.chunk_sizes = config.chunk_sizes
         logger.info("Updated chunking configuration", strategy=config.strategy)

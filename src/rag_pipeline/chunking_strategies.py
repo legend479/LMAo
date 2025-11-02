@@ -10,8 +10,8 @@ from dataclasses import dataclass
 from abc import ABC, abstractmethod
 from enum import Enum
 
-from .document_processor import Chunk, DocumentMetadata
-from ..shared.logging import get_logger
+from .models import Chunk, DocumentMetadata, ChunkingConfig
+from src.shared.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -27,8 +27,8 @@ class ChunkingStrategy(str, Enum):
 
 
 @dataclass
-class ChunkingConfig:
-    """Configuration for chunking strategies"""
+class ChunkingConfigAdvanced:
+    """Advanced configuration for chunking strategies"""
 
     strategy: ChunkingStrategy = ChunkingStrategy.HIERARCHICAL
     chunk_sizes: Dict[str, int] = None
@@ -236,7 +236,7 @@ class ChunkQuality:
 class BaseChunkingStrategy(ABC):
     """Base class for chunking strategies"""
 
-    def __init__(self, config: ChunkingConfig):
+    def __init__(self, config: ChunkingConfigAdvanced):
         self.config = config
 
     @abstractmethod
@@ -668,11 +668,13 @@ class HierarchicalChunkingStrategy(BaseChunkingStrategy):
         return Chunk(
             content=content,
             chunk_id=chunk_id,
-            start_index=start_idx,
-            end_index=end_idx,
+            document_id=doc_id,
+            chunk_index=chunk_num,
+            start_char=start_idx,
+            end_char=end_idx,
+            metadata=metadata,
             chunk_type="code",
             parent_chunk_id=parent_chunk_id,
-            metadata=chunk_metadata,
         )
 
     def _detect_code_type(self, content: str) -> str:
@@ -967,11 +969,13 @@ class HierarchicalChunkingStrategy(BaseChunkingStrategy):
         return Chunk(
             content=content,
             chunk_id=chunk_id,
-            start_index=0,  # Would need more context to calculate exact indices
-            end_index=len(content),
+            document_id=doc_id,
+            chunk_index=chunk_num,
+            start_char=0,  # Would need more context to calculate exact indices
+            end_char=len(content),
+            metadata=metadata,
             chunk_type="text",
             parent_chunk_id=parent_chunk_id,
-            metadata=chunk_metadata,
         )
 
     def _detect_text_type(self, content: str) -> str:
@@ -1002,7 +1006,19 @@ class ChunkingManager:
     """Manager for different chunking strategies"""
 
     def __init__(self, config: ChunkingConfig = None):
-        self.config = config or ChunkingConfig()
+        # Convert basic config to advanced config
+        if config:
+            advanced_config = ChunkingConfigAdvanced(
+                strategy=ChunkingStrategy.HIERARCHICAL,
+                min_chunk_size=config.min_chunk_size,
+                max_chunk_size=config.max_chunk_size,
+                preserve_structure=config.preserve_structure,
+                quality_threshold=config.quality_threshold,
+            )
+        else:
+            advanced_config = ChunkingConfigAdvanced()
+
+        self.config = advanced_config
         self.strategies = {
             ChunkingStrategy.HIERARCHICAL: HierarchicalChunkingStrategy(self.config)
         }

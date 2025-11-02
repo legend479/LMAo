@@ -108,7 +108,7 @@ The Software Engineering Subject Matter Expert (SE SME) Agent is a sophisticated
 - **Elasticsearch**: Vector search and document storage
 
 ### Document Processing
-- **PyPDF2**: PDF text extraction
+- **pypdf**: PDF text extraction
 - **python-docx**: Word document processing
 - **python-pptx**: PowerPoint processing
 - **ReportLab**: PDF generation

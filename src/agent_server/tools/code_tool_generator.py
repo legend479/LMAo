@@ -652,7 +652,7 @@ class RequirementAnalyzer:
             "database": ["sqlite3"],
             "sql": ["sqlite3"],
             "excel": ["openpyxl"],
-            "pdf": ["PyPDF2"],
+            "pdf": ["pypdf"],
             "image": ["Pillow"],
             "plot": ["matplotlib"],
             "chart": ["matplotlib"],
@@ -1354,7 +1354,7 @@ class DependencyAnalyzer:
                 "security_risk": "low",
                 "alternatives": ["xlsxwriter", "xlrd"],
             },
-            "PyPDF2": {
+            "pypdf": {
                 "description": "PDF manipulation library",
                 "category": "file_processing",
                 "security_risk": "medium",
@@ -1517,7 +1517,7 @@ class DependencyAnalyzer:
 
         # Known compatibility issues
         compatibility_issues = {
-            "PyPDF2": ["May have issues with newer PDF formats"],
+            "pypdf": ["May have issues with newer PDF formats"],
             "Pillow": ["Requires system image libraries"],
             "pandas": ["Memory intensive for large datasets"],
             "numpy": ["May require compilation on some systems"],
