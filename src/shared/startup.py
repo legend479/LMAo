@@ -111,6 +111,28 @@ class StartupManager:
 
         logger.info("Initializing core systems")
 
+        # Initialize database
+        try:
+            from .database import initialize_database, database_health_check
+
+            await initialize_database()
+            logger.info("Database initialized")
+
+            # Register database health checker
+            from .health import ServiceHealthChecker
+
+            async def db_health_check():
+                return await database_health_check()
+
+            db_checker = ServiceHealthChecker("database", db_health_check)
+            health_monitor.register_checker(db_checker)
+
+        except Exception as e:
+            logger.error(f"Database initialization failed: {e}")
+            # Don't fail startup for database issues in development
+            if self.settings.environment == "production":
+                raise
+
         # Initialize health monitoring
         setup_default_health_checks()
         logger.info("Health monitoring initialized")
@@ -184,6 +206,15 @@ class StartupManager:
         logger.info("Starting application shutdown", service=self.service_name)
 
         try:
+            # Close database connections
+            try:
+                from .database import close_database_connections
+
+                close_database_connections()
+                logger.info("Database connections closed")
+            except Exception as e:
+                logger.error(f"Error closing database connections: {e}")
+
             # Stop monitoring
             from .metrics import metrics_collector
 
