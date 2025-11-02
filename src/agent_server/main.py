@@ -157,11 +157,24 @@ async def get_agent_server() -> AgentServer:
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict, Any
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan event handler for startup and shutdown"""
+    # Startup
+    await agent_server.initialize()
+    yield
+    # Shutdown
+    await agent_server.shutdown()
+
 
 app = FastAPI(
     title="SE SME Agent - Agent Server",
     description="Agent orchestration and tool execution service",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 # Add CORS middleware
@@ -172,18 +185,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize agent server on startup"""
-    await agent_server.initialize()
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Cleanup on shutdown"""
-    await agent_server.shutdown()
 
 
 @app.get("/health")

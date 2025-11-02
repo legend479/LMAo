@@ -183,14 +183,14 @@ async def send_message(
     )
 
     try:
-        # Process message through agent server
+        # Process message through agent server via HTTP client
         try:
-            from ...agent_server.main import get_agent_server
+            from ...shared.services import get_agent_client
 
-            agent_server = await get_agent_server()
+            agent_client = await get_agent_client()
 
-            # Process the message through the integrated agent system
-            agent_response = await agent_server.process_message(
+            # Process the message through the agent service
+            agent_response = await agent_client.process_message(
                 message=message.message, session_id=session_id, user_id=current_user.id
             )
 
@@ -260,9 +260,27 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     """WebSocket endpoint for real-time chat with authentication and comprehensive features"""
 
     try:
-        # TODO: Implement WebSocket authentication
-        # For now, use a mock user ID
-        user_id = "websocket_user"
+        # Authenticate WebSocket connection
+        from ..websocket_auth import websocket_auth
+        from ...shared.session_manager import get_session_manager
+
+        user_info = await websocket_auth.require_auth(websocket)
+        user_id = user_info["user_id"]
+
+        # Get or create session
+        session_manager = get_session_manager()
+        session_info = await session_manager.get_session(session_id)
+
+        if not session_info:
+            # Create new session if it doesn't exist
+            session_info = await session_manager.create_session(
+                user_id=user_id, session_type="websocket_conversation"
+            )
+            session_id = session_info.session_id
+        elif session_info.user_id != user_id:
+            # User doesn't own this session
+            await websocket.close(code=1008, reason="Session access denied")
+            return
 
         await manager.connect(websocket, session_id, user_id)
 
@@ -357,14 +375,14 @@ async def handle_chat_message(
     await manager.send_typing_indicator(session_id, True)
 
     try:
-        # Process message through agent server
+        # Process message through agent server via HTTP client
         try:
-            from ...agent_server.main import get_agent_server
+            from ...shared.services import get_agent_client
 
-            agent_server = await get_agent_server()
+            agent_client = await get_agent_client()
 
-            # Process the message through the integrated agent system
-            agent_response = await agent_server.process_message(
+            # Process the message through the agent service
+            agent_response = await agent_client.process_message(
                 message=message_content, session_id=session_id, user_id=user_id
             )
 
@@ -420,18 +438,25 @@ async def handle_ping(websocket: WebSocket, session_id: str):
 async def list_user_sessions(current_user: User = Depends(get_current_active_user)):
     """List chat sessions for current user"""
 
-    # TODO: Get actual sessions from database
-    # For now, return mock sessions
-    sessions = [
-        ChatSession(
-            session_id=f"session_{current_user.id}_1",
-            user_id=current_user.id,
-            created_at=datetime.utcnow(),
-            last_activity=datetime.utcnow(),
-            message_count=5,
-            status="active",
+    from ...shared.session_manager import get_session_manager
+
+    session_manager = get_session_manager()
+    session_infos = await session_manager.get_user_sessions(
+        user_id=current_user.id, active_only=True
+    )
+
+    sessions = []
+    for session_info in session_infos:
+        sessions.append(
+            ChatSession(
+                session_id=session_info.session_id,
+                user_id=session_info.user_id,
+                created_at=session_info.created_at,
+                last_activity=session_info.last_activity,
+                message_count=0,  # TODO: Get actual message count
+                status="active" if session_info.is_active else "inactive",
+            )
         )
-    ]
 
     return sessions
 
@@ -442,17 +467,27 @@ async def get_session_info(
 ):
     """Get information about a specific chat session"""
 
-    # TODO: Verify user owns this session
-    # TODO: Get actual session from database
+    from ...shared.session_manager import get_session_manager
+
+    session_manager = get_session_manager()
+    session_info = await session_manager.get_session(session_id)
+
+    if not session_info:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if session_info.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Session access denied")
 
     return {
-        "session_id": session_id,
-        "user_id": current_user.id,
-        "created_at": datetime.utcnow(),
-        "last_activity": datetime.utcnow(),
-        "message_count": 0,
-        "status": "active",
+        "session_id": session_info.session_id,
+        "user_id": session_info.user_id,
+        "created_at": session_info.created_at,
+        "last_activity": session_info.last_activity,
+        "message_count": 0,  # TODO: Get actual message count
+        "status": "active" if session_info.is_active else "inactive",
         "is_connected": session_id in manager.active_connections,
+        "session_type": session_info.session_type,
+        "title": session_info.metadata.get("title"),
     }
 
 

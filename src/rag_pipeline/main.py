@@ -478,11 +478,24 @@ async def get_rag_pipeline() -> RAGPipeline:
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict, Any, List
+from contextlib import asynccontextmanager
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan event handler for startup and shutdown"""
+    # Startup
+    await rag_pipeline.initialize()
+    yield
+    # Shutdown
+    await rag_pipeline.shutdown()
+
 
 app = FastAPI(
     title="SE SME Agent - RAG Pipeline",
     description="Document processing and retrieval service",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 # Add CORS middleware
@@ -493,18 +506,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize RAG pipeline on startup"""
-    await rag_pipeline.initialize()
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Cleanup on shutdown"""
-    await rag_pipeline.shutdown()
 
 
 @app.get("/health")

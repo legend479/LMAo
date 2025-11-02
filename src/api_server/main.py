@@ -147,11 +147,40 @@ class APIServer:
     async def _initialize_external_services(self):
         """Initialize connections to external services"""
         try:
-            # TODO: Initialize connections to agent server, RAG pipeline, etc.
-            logger.info("External service connections initialized")
+            # Initialize service registry for inter-service communication
+            from ..shared.services import get_service_registry
+
+            service_registry = await get_service_registry()
+
+            # Test connectivity to services
+            service_status = await service_registry.get_service_status()
+
+            agent_status = service_status.get("agent_service", {}).get(
+                "status", "unknown"
+            )
+            rag_status = service_status.get("rag_service", {}).get("status", "unknown")
+
+            logger.info(
+                "External service connections initialized",
+                agent_service_status=agent_status,
+                rag_service_status=rag_status,
+            )
+
+            # Log warnings for unhealthy services but don't fail startup
+            if agent_status != "healthy":
+                logger.warning(
+                    "Agent service is not healthy - some features may be limited"
+                )
+            if rag_status != "healthy":
+                logger.warning(
+                    "RAG service is not healthy - document search may be limited"
+                )
+
         except Exception as e:
             logger.error("Failed to initialize external services", error=str(e))
-            raise
+            # Don't fail startup for external service issues in development
+            if self.settings.environment == "production":
+                raise
 
     async def _cleanup_database(self):
         """Cleanup database connections"""
@@ -172,7 +201,12 @@ class APIServer:
     async def _cleanup_external_services(self):
         """Cleanup external service connections"""
         try:
-            # TODO: Close external service connections
+            # Shutdown service registry
+            from ..shared.services import _service_registry
+
+            if _service_registry:
+                await _service_registry.shutdown()
+
             logger.info("External service connections closed")
         except Exception as e:
             logger.error("Error closing external service connections", error=str(e))
