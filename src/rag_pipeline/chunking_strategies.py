@@ -36,7 +36,7 @@ class ChunkingConfigAdvanced:
     min_chunk_size: int = 50
     max_chunk_size: int = 4096
     preserve_structure: bool = True
-    quality_threshold: float = 0.7
+    quality_threshold: float = 0.3  # Lowered threshold to be more permissive
 
     def __post_init__(self):
         if self.chunk_sizes is None:
@@ -260,8 +260,8 @@ class BaseChunkingStrategy(ABC):
             "document_author": base_metadata.author,
             "document_category": base_metadata.category,
             "creation_date": (
-                base_metadata.creation_date.isoformat()
-                if base_metadata.creation_date
+                base_metadata.created_at.isoformat()
+                if base_metadata.created_at
                 else None
             ),
             "file_size": base_metadata.file_size,

@@ -27,23 +27,37 @@ class DocumentType(str, Enum):
 class DocumentMetadata:
     """Document metadata"""
 
-    source_path: str
-    file_name: str
-    file_size: int
-    document_type: DocumentType
-    created_at: datetime
-    modified_at: datetime
-    content_hash: str
+    source_path: str = ""
+    file_name: str = ""
+    file_size: int = 0
+    document_type: DocumentType = DocumentType.UNKNOWN
+    created_at: datetime = None
+    modified_at: datetime = None
+    content_hash: str = ""
     page_count: Optional[int] = None
     word_count: Optional[int] = None
     language: Optional[str] = None
     author: Optional[str] = None
     title: Optional[str] = None
+    mime_type: Optional[str] = None
+    subject: Optional[str] = None
+    keywords: List[str] = None
+    tags: List[str] = None
+    encoding: Optional[str] = None
+    category: Optional[str] = None
     custom_metadata: Dict[str, Any] = None
 
     def __post_init__(self):
         if self.custom_metadata is None:
             self.custom_metadata = {}
+        if self.keywords is None:
+            self.keywords = []
+        if self.tags is None:
+            self.tags = []
+        if self.created_at is None:
+            self.created_at = datetime.now()
+        if self.modified_at is None:
+            self.modified_at = datetime.now()
 
 
 @dataclass
@@ -56,7 +70,7 @@ class Chunk:
     chunk_index: int
     start_char: int
     end_char: int
-    metadata: DocumentMetadata
+    metadata: Dict[str, Any]  # Changed from DocumentMetadata to Dict for flexibility
     chunk_type: str = "text"
     parent_chunk_id: Optional[str] = None
     child_chunk_ids: List[str] = None

@@ -31,31 +31,7 @@ logger = get_logger(__name__)
 ChunkingManager = None
 
 
-@dataclass
-class DocumentMetadata:
-    """Comprehensive document metadata"""
-
-    title: Optional[str] = None
-    author: Optional[str] = None
-    subject: Optional[str] = None
-    keywords: List[str] = None
-    creation_date: Optional[datetime] = None
-    modification_date: Optional[datetime] = None
-    language: Optional[str] = None
-    page_count: Optional[int] = None
-    word_count: Optional[int] = None
-    file_size: Optional[int] = None
-    mime_type: Optional[str] = None
-    encoding: Optional[str] = None
-    source_url: Optional[str] = None
-    category: Optional[str] = None
-    tags: List[str] = None
-
-    def __post_init__(self):
-        if self.keywords is None:
-            self.keywords = []
-        if self.tags is None:
-            self.tags = []
+# DocumentMetadata is imported from models.py
 
 
 @dataclass
@@ -140,13 +116,15 @@ class DocumentProcessor:
             if not hasattr(self, "chunking_manager") or self.chunking_manager is None:
                 self.chunking_manager = ChunkingManager(self.chunking_config)
 
-            # Initialize processing statistics
-            self._processing_stats = {
-                "documents_processed": 0,
-                "total_chunks_created": 0,
-                "processing_errors": 0,
-                "last_processed": None,
-            }
+            # Don't reinitialize _processing_stats - it's already set in constructor
+            # Just add additional stats if needed
+            self._processing_stats.update(
+                {
+                    "total_chunks_created": 0,
+                    "processing_errors": 0,
+                    "last_processed": None,
+                }
+            )
 
             logger.info("Document parsing libraries and chunking manager initialized")
 
@@ -218,6 +196,8 @@ class DocumentProcessor:
                 metadata=combined_metadata,
                 processing_time=processing_time,
                 content_hash=content_hash,
+                total_chunks=len(chunks),
+                total_characters=len(content),
                 processing_errors=processing_errors,
             )
 
@@ -254,10 +234,15 @@ class DocumentProcessor:
                 content="",
                 chunks=[],
                 metadata=DocumentMetadata(
-                    title=f"Error processing {Path(file_path).name}"
+                    source_path=file_path,
+                    file_name=Path(file_path).name,
+                    title=f"Error processing {Path(file_path).name}",
+                    document_type=DocumentType.UNKNOWN,
                 ),
                 processing_time=processing_time,
                 content_hash="",
+                total_chunks=0,
+                total_characters=0,
                 processing_errors=processing_errors,
             )
 
@@ -322,13 +307,20 @@ class DocumentProcessor:
             else:
                 # Fallback to text extraction
                 content, _ = await self._extract_txt_with_metadata(file_path)
-                return content, DocumentMetadata()
+                return content, DocumentMetadata(
+                    source_path=file_path,
+                    file_name=Path(file_path).name,
+                    document_type=DocumentType.UNKNOWN,
+                )
 
         except Exception as e:
             logger.error("Content extraction failed", file_path=file_path, error=str(e))
             error_content = f"Error extracting content from {file_path}: {str(e)}"
             return error_content, DocumentMetadata(
-                title=f"Error: {Path(file_path).name}"
+                source_path=file_path,
+                file_name=Path(file_path).name,
+                title=f"Error: {Path(file_path).name}",
+                document_type=DocumentType.UNKNOWN,
             )
 
     async def _extract_txt_with_metadata(
@@ -352,13 +344,16 @@ class DocumentProcessor:
 
         # Create metadata
         metadata = DocumentMetadata(
-            title=path.stem,
+            source_path=file_path,
+            file_name=path.name,
             file_size=stat.st_size,
-            creation_date=datetime.fromtimestamp(stat.st_ctime),
-            modification_date=datetime.fromtimestamp(stat.st_mtime),
+            document_type=DocumentType.TXT,
+            created_at=datetime.fromtimestamp(stat.st_ctime),
+            modified_at=datetime.fromtimestamp(stat.st_mtime),
+            title=path.stem,
+            word_count=len(content.split()),
             mime_type="text/plain",
             encoding=encoding,
-            word_count=len(content.split()),
             category="text",
         )
 
@@ -412,13 +407,16 @@ class DocumentProcessor:
 
         # Create metadata
         metadata = DocumentMetadata(
-            title=title,
+            source_path=file_path,
+            file_name=path.name,
             file_size=stat.st_size,
-            creation_date=datetime.fromtimestamp(stat.st_ctime),
-            modification_date=datetime.fromtimestamp(stat.st_mtime),
+            document_type=DocumentType.MD,
+            created_at=datetime.fromtimestamp(stat.st_ctime),
+            modified_at=datetime.fromtimestamp(stat.st_mtime),
+            title=title,
+            word_count=len(content.split()),
             mime_type="text/markdown",
             encoding=encoding,
-            word_count=len(content.split()),
             category="documentation",
             tags=tags,
             keywords=keywords,
@@ -484,15 +482,18 @@ class DocumentProcessor:
 
             # Create metadata
             metadata = DocumentMetadata(
+                source_path=file_path,
+                file_name=path.name,
+                file_size=stat.st_size,
+                document_type=DocumentType.PDF,
+                created_at=creation_date,
+                modified_at=modification_date,
                 title=metadata_dict.get("title") or path.stem,
                 author=metadata_dict.get("author"),
-                subject=metadata_dict.get("subject"),
-                creation_date=creation_date,
-                modification_date=modification_date,
                 page_count=len(pdf_reader.pages),
-                file_size=stat.st_size,
-                mime_type="application/pdf",
                 word_count=len(content.split()),
+                mime_type="application/pdf",
+                subject=metadata_dict.get("subject"),
                 category="document",
             )
 
@@ -531,16 +532,18 @@ class DocumentProcessor:
 
             # Create metadata
             metadata = DocumentMetadata(
+                source_path=file_path,
+                file_name=path.name,
+                file_size=stat.st_size,
+                document_type=DocumentType.DOCX,
+                created_at=props.created or datetime.fromtimestamp(stat.st_ctime),
+                modified_at=props.modified or datetime.fromtimestamp(stat.st_mtime),
                 title=props.title or path.stem,
                 author=props.author,
+                word_count=len(content.split()),
+                mime_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                 subject=props.subject,
                 keywords=props.keywords.split(",") if props.keywords else [],
-                creation_date=props.created or datetime.fromtimestamp(stat.st_ctime),
-                modification_date=props.modified
-                or datetime.fromtimestamp(stat.st_mtime),
-                file_size=stat.st_size,
-                mime_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                word_count=len(content.split()),
                 category="document",
             )
 
@@ -585,17 +588,19 @@ class DocumentProcessor:
 
             # Create metadata
             metadata = DocumentMetadata(
+                source_path=file_path,
+                file_name=path.name,
+                file_size=stat.st_size,
+                document_type=DocumentType.PPTX,
+                created_at=props.created or datetime.fromtimestamp(stat.st_ctime),
+                modified_at=props.modified or datetime.fromtimestamp(stat.st_mtime),
                 title=props.title or path.stem,
                 author=props.author,
+                page_count=len(prs.slides),
+                word_count=len(content.split()),
+                mime_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
                 subject=props.subject,
                 keywords=props.keywords.split(",") if props.keywords else [],
-                creation_date=props.created or datetime.fromtimestamp(stat.st_ctime),
-                modification_date=props.modified
-                or datetime.fromtimestamp(stat.st_mtime),
-                file_size=stat.st_size,
-                mime_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                word_count=len(content.split()),
-                page_count=len(prs.slides),
                 category="presentation",
             )
 
@@ -631,8 +636,8 @@ class DocumentProcessor:
             merged.title = Path(file_path).stem
 
         # Add processing timestamp
-        if not merged.modification_date:
-            merged.modification_date = datetime.utcnow()
+        if not merged.modified_at:
+            merged.modified_at = datetime.utcnow()
 
         return merged
 
@@ -751,20 +756,39 @@ class DocumentProcessor:
 
     async def get_processing_stats(self) -> Dict[str, Any]:
         """Get processing statistics"""
-        return {
-            "total_processed": self._processing_stats["total_processed"],
-            "successful": self._processing_stats["successful"],
-            "failed": self._processing_stats["failed"],
-            "duplicates_skipped": self._processing_stats["duplicates_skipped"],
-            "success_rate": (
-                self._processing_stats["successful"]
-                / max(1, self._processing_stats["total_processed"])
-            )
-            * 100,
-            "cached_documents": len(self._processed_documents),
-            "supported_formats": self.supported_formats,
-            "chunk_sizes": self.chunk_sizes,
-        }
+        try:
+            return {
+                "total_processed": self._processing_stats.get("total_processed", 0),
+                "successful": self._processing_stats.get("successful", 0),
+                "failed": self._processing_stats.get("failed", 0),
+                "duplicates_skipped": self._processing_stats.get(
+                    "duplicates_skipped", 0
+                ),
+                "success_rate": (
+                    self._processing_stats.get("successful", 0)
+                    / max(1, self._processing_stats.get("total_processed", 1))
+                )
+                * 100,
+                "cached_documents": len(self._processed_documents),
+                "supported_formats": self.supported_formats,
+                "chunk_sizes": self.chunk_sizes,
+                "total_chunks_created": self._processing_stats.get(
+                    "total_chunks_created", 0
+                ),
+            }
+        except Exception as e:
+            logger.error(f"Error getting processing stats: {e}")
+            return {
+                "total_processed": 0,
+                "successful": 0,
+                "failed": 0,
+                "duplicates_skipped": 0,
+                "success_rate": 0.0,
+                "cached_documents": 0,
+                "supported_formats": self.supported_formats,
+                "chunk_sizes": getattr(self, "chunk_sizes", 1000),
+                "error": str(e),
+            }
 
     async def clear_cache(self):
         """Clear the document processing cache"""
