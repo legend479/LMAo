@@ -18,7 +18,7 @@ import asyncio
 import uuid
 
 from .auth import get_current_active_user, User
-from ...shared.logging import get_logger
+from src.shared.logging import get_logger
 
 logger = get_logger(__name__)
 router = APIRouter()
@@ -185,7 +185,7 @@ async def send_message(
     try:
         # Process message through agent server via HTTP client
         try:
-            from ...shared.services import get_agent_client
+            from src.shared.services import get_agent_client
 
             agent_client = await get_agent_client()
 
@@ -262,7 +262,7 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
     try:
         # Authenticate WebSocket connection
         from ..websocket_auth import websocket_auth
-        from ...shared.session_manager import get_session_manager
+        from src.shared.session_manager import get_session_manager
 
         user_info = await websocket_auth.require_auth(websocket)
         user_id = user_info["user_id"]
@@ -377,7 +377,7 @@ async def handle_chat_message(
     try:
         # Process message through agent server via HTTP client
         try:
-            from ...shared.services import get_agent_client
+            from src.shared.services import get_agent_client
 
             agent_client = await get_agent_client()
 
@@ -438,7 +438,7 @@ async def handle_ping(websocket: WebSocket, session_id: str):
 async def list_user_sessions(current_user: User = Depends(get_current_active_user)):
     """List chat sessions for current user"""
 
-    from ...shared.session_manager import get_session_manager
+    from src.shared.session_manager import get_session_manager
 
     session_manager = get_session_manager()
     session_infos = await session_manager.get_user_sessions(
@@ -467,7 +467,7 @@ async def get_session_info(
 ):
     """Get information about a specific chat session"""
 
-    from ...shared.session_manager import get_session_manager
+    from src.shared.session_manager import get_session_manager
 
     session_manager = get_session_manager()
     session_info = await session_manager.get_session(session_id)

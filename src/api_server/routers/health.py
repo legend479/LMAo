@@ -8,8 +8,8 @@ from pydantic import BaseModel
 from typing import Dict, Any, List
 from datetime import datetime
 
-from ...shared.config import get_settings
-from ...shared.health import health_monitor, HealthStatus
+from src.shared.config import get_settings
+from src.shared.health import health_monitor, HealthStatus
 
 router = APIRouter()
 

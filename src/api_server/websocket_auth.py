@@ -10,7 +10,8 @@ from urllib.parse import parse_qs
 
 from src.shared.config import get_settings
 from src.shared.logging import get_logger
-from .auth import get_user_by_id, User
+from src.shared.database.operations import UserOperations
+from src.shared.database.models import User
 
 logger = get_logger(__name__)
 
@@ -51,7 +52,7 @@ async def authenticate_websocket(websocket: WebSocket) -> Optional[User]:
             return None
 
         # Get user from database
-        user = await get_user_by_id(user_id)
+        user = UserOperations.get_user_by_id(user_id)
         if not user:
             logger.warning(f"WebSocket user not found: {user_id}")
             return None

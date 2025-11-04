@@ -9,8 +9,8 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime
 
 from .auth import require_roles, User
-from ...shared.config import get_settings
-from ...shared.logging import get_logger
+from src.shared.config import get_settings
+from src.shared.logging import get_logger
 
 logger = get_logger(__name__)
 router = APIRouter()
@@ -107,7 +107,7 @@ async def get_system_info(current_user: User = Depends(require_roles(["admin"]))
 async def get_detailed_health(current_user: User = Depends(require_roles(["admin"]))):
     """Get detailed health information for all components"""
 
-    from ...shared.health import health_monitor
+    from src.shared.health import health_monitor
 
     system_health = await health_monitor.check_all()
 

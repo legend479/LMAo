@@ -17,7 +17,7 @@ from .prompt_engineering import (
     PromptGenerationRequest,
     PromptType,
 )
-from .tools.readability_scoring import ReadabilityScorer
+from .tools.readability_scoring import ReadabilityCalculator
 from src.shared.logging import get_logger
 
 logger = get_logger(__name__)
@@ -456,7 +456,7 @@ class ContentAnalyzer:
     """Analyzes content characteristics and complexity"""
 
     def __init__(self):
-        self.readability_scorer = ReadabilityScorer()
+        self.readability_scorer = ReadabilityCalculator()
         self.technical_terms = self._load_technical_terms()
         self.jargon_patterns = self._load_jargon_patterns()
 
@@ -774,7 +774,7 @@ class ContentTransformer:
 
     def __init__(self):
         self.transformation_strategies = self._initialize_transformation_strategies()
-        self.readability_scorer = ReadabilityScorer()
+        self.readability_scorer = ReadabilityCalculator()
 
     async def transform_content(
         self,

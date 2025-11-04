@@ -11,7 +11,7 @@ import brotli
 from typing import List, Optional
 import io
 
-from ...shared.logging import get_logger
+from src.shared.logging import get_logger
 
 logger = get_logger(__name__)
 

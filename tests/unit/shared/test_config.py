@@ -24,9 +24,11 @@ from src.shared.config import (
 class TestSettings:
     """Test Settings class and its variants."""
 
+    @patch.dict(os.environ, {}, clear=True)
     def test_default_settings(self):
         """Test default settings values."""
-        settings = Settings()
+        # Create settings without loading from .env file
+        settings = Settings(_env_file=None)
 
         assert settings.app_name == "SE SME Agent"
         assert settings.version == "1.0.0"
@@ -35,38 +37,45 @@ class TestSettings:
         assert settings.api_host == "0.0.0.0"
         assert settings.api_port == 8000
 
+    @patch.dict(os.environ, {}, clear=True)
     def test_development_settings(self):
         """Test development-specific settings."""
-        settings = DevelopmentSettings()
+        settings = DevelopmentSettings(_env_file=None)
 
         assert settings.debug is True
         assert settings.log_level == "DEBUG"
         assert settings.environment == "development"
 
+    @patch.dict(os.environ, {}, clear=True)
     def test_production_settings(self):
         """Test production-specific settings."""
         with pytest.raises(ValueError):
             # Should fail without required production settings
-            ProductionSettings()
+            ProductionSettings(_env_file=None)
 
+    @patch.dict(os.environ, {}, clear=True)
     def test_testing_settings(self):
         """Test testing-specific settings."""
-        settings = TestingSettings()
+        settings = TestingSettings(_env_file=None)
 
         assert settings.debug is True
         assert settings.log_level == "DEBUG"
         assert settings.environment == "testing"
         assert "sqlite:///:memory:" in settings.database_url
 
-    @patch.dict(os.environ, {"ENVIRONMENT": "development"})
+    @patch.dict(os.environ, {"ENVIRONMENT": "development"}, clear=True)
     def test_get_settings_development(self):
         """Test get_settings returns development settings."""
+        # Clear the cache first
+        get_settings.cache_clear()
         settings = get_settings()
         assert isinstance(settings, DevelopmentSettings)
 
-    @patch.dict(os.environ, {"ENVIRONMENT": "testing"})
+    @patch.dict(os.environ, {"ENVIRONMENT": "testing"}, clear=True)
     def test_get_settings_testing(self):
         """Test get_settings returns testing settings."""
+        # Clear the cache first
+        get_settings.cache_clear()
         settings = get_settings()
         assert isinstance(settings, TestingSettings)
 
@@ -212,17 +221,20 @@ class TestConfigCaching:
 
     def test_get_settings_caching(self):
         """Test that get_settings caches the result."""
-        with patch.dict(os.environ, {"ENVIRONMENT": "development"}):
+        with patch.dict(os.environ, {"ENVIRONMENT": "development"}, clear=True):
+            # Clear cache first
+            get_settings.cache_clear()
             settings1 = get_settings()
             settings2 = get_settings()
 
             # Should return the same instance due to caching
             assert settings1 is settings2
 
+    @patch.dict(os.environ, {}, clear=True)
     def test_settings_immutability(self):
         """Test that settings objects are effectively immutable."""
-        settings = Settings()
+        settings = Settings(_env_file=None)
 
         # Pydantic models are immutable by default
-        with pytest.raises(ValueError):
+        with pytest.raises((ValueError, AttributeError)):
             settings.app_name = "Modified Name"

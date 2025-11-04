@@ -12,8 +12,8 @@ from dataclasses import dataclass
 from enum import Enum
 import hashlib
 
-from ...shared.config import get_settings
-from ...shared.logging import get_logger
+from src.shared.config import get_settings
+from src.shared.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -290,14 +290,27 @@ class RateLimitingMiddleware(BaseHTTPMiddleware):
 
         # Performance monitoring
         self.enable_monitoring = enable_performance_monitoring
-        self.performance_monitor = PerformanceMonitor() if enable_monitoring else None
+        self.performance_monitor = (
+            PerformanceMonitor() if enable_performance_monitoring else None
+        )
 
         # Cache for frequently accessed data
         self.cache: Dict[str, Tuple[Any, float]] = {}
         self.cache_ttl = 300  # 5 minutes
 
-        # Cleanup task
-        self._cleanup_task = asyncio.create_task(self._periodic_cleanup())
+        # Cleanup task (only in non-test environments)
+        self._cleanup_task = None
+        if self.settings.environment != "testing":
+            self._cleanup_task = asyncio.create_task(self._periodic_cleanup())
+
+    async def cleanup(self):
+        """Clean up background tasks"""
+        if hasattr(self, "_cleanup_task") and self._cleanup_task is not None:
+            self._cleanup_task.cancel()
+            try:
+                await self._cleanup_task
+            except asyncio.CancelledError:
+                pass
 
     def _initialize_rate_limit_rules(self) -> List[RateLimitRule]:
         """Initialize rate limiting rules"""

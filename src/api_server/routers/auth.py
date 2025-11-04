@@ -11,8 +11,8 @@ from datetime import datetime, timedelta
 import jwt
 from passlib.context import CryptContext
 
-from ...shared.config import get_settings
-from ...shared.logging import get_logger
+from src.shared.config import get_settings
+from src.shared.logging import get_logger
 from ..auth import jwt_manager, rbac_manager, Permission
 
 logger = get_logger(__name__)

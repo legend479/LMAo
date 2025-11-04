@@ -10,7 +10,7 @@ import re
 from typing import Any
 import uuid
 
-from ...shared.logging import get_logger
+from src.shared.logging import get_logger
 
 logger = get_logger(__name__)
 

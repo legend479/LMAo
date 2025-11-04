@@ -350,6 +350,7 @@ class TestRetrievalPipeline:
         pipeline.get_stages = Mock()
         return pipeline
 
+    @pytest.mark.asyncio
     async def test_pipeline_execution(self, mock_pipeline):
         """Test pipeline execution."""
         query = "test query"

@@ -26,13 +26,15 @@ class TestAgentCore:
         assert "reasoning" in mock_agent.capabilities
         assert mock_agent.status == "active"
 
-    @patch("agent_server.core.AgentManager")
-    def test_agent_manager_creation(self, mock_manager):
-        """Test agent manager creation."""
-        mock_manager.return_value.agents = {}
-        manager = mock_manager()
-        assert hasattr(manager, "agents")
+    @patch("agent_server.main.AgentServer")
+    def test_agent_manager_creation(self, mock_agent_server):
+        """Test agent server creation."""
+        mock_agent_server.return_value._initialized = False
+        server = mock_agent_server()
+        assert hasattr(server, "_initialized")
 
+    # FIX: Added the pytest.mark.asyncio decorator
+    @pytest.mark.asyncio
     async def test_agent_message_processing(self, mock_agent):
         """Test agent message processing."""
         mock_agent.process_message = AsyncMock(return_value="Processed message")
@@ -83,13 +85,19 @@ class TestAgentCommunication:
             "user_id": "user_456",
         }
 
+    # FIX: Added the pytest.mark.asyncio decorator
+    @pytest.mark.asyncio
     async def test_message_routing(self, mock_message):
-        """Test message routing to appropriate agent."""
-        with patch("agent_server.router.route_message") as mock_route:
-            mock_route.return_value = "sme_agent"
-            result = mock_route(mock_message)
-            assert result == "sme_agent"
+        """Test message routing through orchestrator."""
+        with patch(
+            "agent_server.orchestrator.LangGraphOrchestrator.execute_plan"
+        ) as mock_execute:
+            mock_execute.return_value = Mock(response="Test response", metadata={})
+            result = await mock_execute(Mock(), "session_123")
+            assert result.response == "Test response"
 
+    # FIX: Added the pytest.mark.asyncio decorator
+    @pytest.mark.asyncio
     async def test_message_validation(self, mock_message):
         """Test message validation."""
         # Test valid message
@@ -133,6 +141,8 @@ class TestAgentTools:
         tool = mock_tool_registry.get_tool("calculator")
         assert tool == mock_tool_registry.tools["calculator"]
 
+    # FIX: Added the pytest.mark.asyncio decorator
+    @pytest.mark.asyncio
     async def test_tool_execution(self, mock_tool_registry):
         """Test tool execution."""
         calculator = mock_tool_registry.tools["calculator"]
@@ -175,25 +185,23 @@ class TestAgentMemory:
 class TestAgentError:
     """Test agent error handling."""
 
-    def test_tool_execution_error(self):
+    @pytest.mark.asyncio
+    async def test_tool_execution_error(self):
         """Test handling of tool execution errors."""
-        with patch("agent_server.tools.execute_tool") as mock_execute:
+        with patch("agent_server.main.AgentServer.execute_tool") as mock_execute:
             mock_execute.side_effect = Exception("Tool failed")
             # Should handle gracefully
-            try:
-                mock_execute("broken_tool", {})
-            except Exception as e:
-                assert str(e) == "Tool failed"
+            with pytest.raises(Exception, match="Tool failed"):
+                await mock_execute("broken_tool", {}, "session_123")
 
-    def test_message_processing_error(self):
+    @pytest.mark.asyncio
+    async def test_message_processing_error(self):
         """Test handling of message processing errors."""
-        with patch("agent_server.core.process_message") as mock_process:
+        with patch("agent_server.main.AgentServer.process_message") as mock_process:
             mock_process.side_effect = ValueError("Invalid message format")
             # Should handle gracefully
-            try:
-                mock_process("invalid message")
-            except ValueError as e:
-                assert "Invalid message format" in str(e)
+            with pytest.raises(ValueError, match="Invalid message format"):
+                await mock_process("invalid message", "session_123")
 
     def test_agent_recovery(self):
         """Test agent recovery from errors."""

@@ -15,8 +15,8 @@ from pydantic import BaseModel, Field
 from enum import Enum
 
 from .auth import get_current_active_user, User
-from ...shared.logging import get_logger
-from ...shared.config import get_settings
+from src.shared.logging import get_logger
+from src.shared.config import get_settings
 
 logger = get_logger(__name__)
 router = APIRouter()
@@ -153,7 +153,7 @@ async def upload_document(
         )
 
         # Create document record in database
-        from ...shared.database import DocumentOperations
+        from src.shared.database import DocumentOperations
         import hashlib
 
         content_hash = hashlib.sha256(content).hexdigest()
@@ -203,12 +203,12 @@ async def process_document_for_rag(document_id: str, file_path: str, user_id: st
         logger.info(f"Starting RAG processing for document {document_id}")
 
         # Update processing status
-        from ...shared.database import DocumentOperations
+        from src.shared.database import DocumentOperations
 
         DocumentOperations.update_document_processing_status(document_id, "processing")
 
         # Process through RAG pipeline
-        from ...shared.services import get_rag_client
+        from src.shared.services import get_rag_client
 
         rag_client = await get_rag_client()
 
@@ -246,7 +246,7 @@ async def process_document_for_rag(document_id: str, file_path: str, user_id: st
 
         # Mark as failed
         try:
-            from ...shared.database import DocumentOperations
+            from src.shared.database import DocumentOperations
 
             DocumentOperations.update_document_processing_status(document_id, "failed")
         except:
@@ -262,7 +262,7 @@ async def list_documents(
     """List user's documents"""
 
     try:
-        from ...shared.database import DocumentOperations
+        from src.shared.database import DocumentOperations
 
         documents = DocumentOperations.get_user_documents(
             user_id=current_user.id, status=status, limit=limit
@@ -295,7 +295,7 @@ async def get_document_info(
     """Get information about a specific document"""
 
     try:
-        from ...shared.database import DocumentOperations
+        from src.shared.database import DocumentOperations
 
         document = DocumentOperations.get_document_by_id(document_id)
 
@@ -331,7 +331,7 @@ async def delete_document(
     """Delete a document"""
 
     try:
-        from ...shared.database import DocumentOperations
+        from src.shared.database import DocumentOperations
 
         document = DocumentOperations.get_document_by_id(document_id)
 

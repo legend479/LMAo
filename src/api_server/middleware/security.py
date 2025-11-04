@@ -11,8 +11,8 @@ from typing import List, Dict, Any
 import hashlib
 import time
 
-from ...shared.config import get_settings
-from ...shared.logging import get_logger
+from src.shared.config import get_settings
+from src.shared.logging import get_logger
 
 logger = get_logger(__name__)
 
@@ -31,9 +31,10 @@ class PromptInjectionDetector:
         r"(?i)(bypass|circumvent|override)\s+(safety|security|filters?|restrictions?)",
         r"(?i)do\s+anything\s+now|DAN\s+mode",
         # Prompt leakage attempts
-        r"(?i)(show|reveal|display|print)\s+(your|the)\s+(prompt|instructions?|system\s+message)",
+        r"(?i)(show|reveal|display|print)\s+(me\s+)?(your|the)\s+(prompt|instructions?|system\s+message)",
         r"(?i)(what\s+(is|are)\s+your|tell\s+me\s+your)\s+(instructions?|prompts?|rules?)",
         r"(?i)repeat\s+(your|the)\s+(initial|original|system)\s+(prompt|instructions?)",
+        r"(?i)(show|give)\s+me\s+your\s+(system\s+)?prompt",
         # Context manipulation
         r"(?i)(new\s+session|start\s+over|reset\s+context|clear\s+memory)",
         r"(?i)(end\s+of|finish)\s+(conversation|chat|session)",
@@ -183,9 +184,11 @@ class PromptInjectionDetector:
         """Check for potential encoding/obfuscation attempts"""
         score = 0.0
 
-        # Check for base64-like patterns
-        if re.search(r"[A-Za-z0-9+/]{20,}={0,2}", text):
-            score += 0.2
+        # Check for base64-like patterns with decode context
+        if re.search(r"(?i)(decode|base64).*[A-Za-z0-9+/]{10,}={0,2}", text):
+            score += 0.3
+        elif re.search(r"[A-Za-z0-9+/]{20,}={0,2}", text):
+            score += 0.1
 
         # Check for hex patterns
         if re.search(r"(?:0x)?[0-9a-fA-F]{16,}", text):
@@ -464,8 +467,26 @@ class SecurityMiddleware(BaseHTTPMiddleware):
         try:
             # Get response content
             content = b""
-            async for chunk in response.body_iterator:
-                content += chunk
+
+            # Handle different types of body_iterator
+            if hasattr(response, "body_iterator"):
+                if hasattr(response.body_iterator, "__aiter__"):
+                    # Async iterator
+                    async for chunk in response.body_iterator:
+                        content += chunk
+                elif isinstance(response.body_iterator, (list, tuple)):
+                    # List/tuple of chunks
+                    for chunk in response.body_iterator:
+                        if isinstance(chunk, bytes):
+                            content += chunk
+                        elif isinstance(chunk, str):
+                            content += chunk.encode("utf-8")
+                else:
+                    # Single chunk
+                    if isinstance(response.body_iterator, bytes):
+                        content = response.body_iterator
+                    elif isinstance(response.body_iterator, str):
+                        content = response.body_iterator.encode("utf-8")
 
             if not content:
                 return response

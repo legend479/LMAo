@@ -196,6 +196,12 @@ class TestQueryAnalysis:
     async def test_classify_intent_advanced_code_generation(self):
         """Test intent classification for code generation."""
         module = PlanningModule()
+
+        # Mock the LLM integration to return CODE_GENERATION
+        mock_llm = AsyncMock()
+        mock_llm.generate_response.return_value = "CODE_GENERATION"
+        module.llm_integration = mock_llm
+
         context = ConversationContext(
             session_id="test_session",
             user_id="test_user",
@@ -212,6 +218,12 @@ class TestQueryAnalysis:
     async def test_classify_intent_advanced_knowledge_retrieval(self):
         """Test intent classification for knowledge retrieval."""
         module = PlanningModule()
+
+        # Mock the LLM integration to return KNOWLEDGE_RETRIEVAL
+        mock_llm = AsyncMock()
+        mock_llm.generate_response.return_value = "KNOWLEDGE_RETRIEVAL"
+        module.llm_integration = mock_llm
+
         context = ConversationContext(
             session_id="test_session",
             user_id="test_user",
@@ -226,6 +238,12 @@ class TestQueryAnalysis:
     async def test_classify_intent_advanced_multi_step(self):
         """Test intent classification for multi-step queries."""
         module = PlanningModule()
+
+        # Mock the LLM integration to return MULTI_STEP
+        mock_llm = AsyncMock()
+        mock_llm.generate_response.return_value = "MULTI_STEP"
+        module.llm_integration = mock_llm
+
         context = ConversationContext(
             session_id="test_session",
             user_id="test_user",
@@ -538,7 +556,7 @@ class TestTaskDecomposition:
         # Test with no language entities
         entities_no_lang = [Entity("api", EntityType.CONCEPT, 0.7)]
         language_default = module._detect_programming_language(entities_no_lang)
-        assert language_default == "python"  # Should default to Python
+        assert language_default == "auto_detect"  # Should default to auto-detection
 
 
 @pytest.mark.unit

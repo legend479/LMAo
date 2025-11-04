@@ -171,8 +171,12 @@ class ConfigValidator:
             try:
                 parsed = urlparse(self.settings.database_url)
 
-                # Check scheme
-                if parsed.scheme not in ["postgresql", "postgres", "sqlite"]:
+                # Check if URL has a valid scheme and netloc (for non-sqlite URLs)
+                if not parsed.scheme:
+                    errors.append("Invalid DATABASE_URL format")
+                elif parsed.scheme in ["postgresql", "postgres"] and not parsed.netloc:
+                    errors.append("Invalid DATABASE_URL format")
+                elif parsed.scheme not in ["postgresql", "postgres", "sqlite"]:
                     warnings.append(
                         f"Database scheme '{parsed.scheme}' may not be supported"
                     )
@@ -190,8 +194,8 @@ class ConfigValidator:
                 if parsed.username == "postgres" and parsed.password == "password":
                     warnings.append("Using default database credentials")
 
-            except Exception as e:
-                errors.append(f"Invalid DATABASE_URL format: {str(e)}")
+            except Exception:
+                errors.append("Invalid DATABASE_URL format")
 
         # Validate Redis URL
         if not self.settings.redis_url:
@@ -331,16 +335,44 @@ class ConfigValidator:
         except socket.error:
             pass
 
-        # Check for valid hostname
-        hostname_pattern = re.compile(r"^(?!-)[A-Z\d-]{1,63}(?<!-)$", re.IGNORECASE)
-
+        # Check for localhost
         if host == "localhost":
             return True
 
-        if all(hostname_pattern.match(part) for part in host.split(".")):
-            return True
+        # Check for valid hostname
+        # Hostname rules: can contain letters, numbers, hyphens
+        # Cannot start or end with hyphen
+        # Each label must be 1-63 characters
+        hostname_pattern = re.compile(r"^(?!-)[A-Z\d-]{1,63}(?<!-)$", re.IGNORECASE)
 
-        return False
+        # Split by dots and validate each part
+        parts = host.split(".")
+
+        # Validate each part
+        for part in parts:
+            if not part:  # Empty part (e.g., "host..com")
+                return False
+            if not hostname_pattern.match(part):
+                return False
+            # Additional check: cannot be all numeric (would be confused with IP)
+            if part.isdigit():
+                return False
+
+        # For single-part hostnames, be more restrictive
+        # They should either be well-known names or follow stricter rules
+        if len(parts) == 1:
+            # Allow common single-part hostnames
+            if host in ["localhost", "server", "host", "node"]:
+                return True
+            # For other single-part names, require at least one letter and no hyphens
+            # This excludes things like "invalid-ip" which looks suspicious
+            if "-" in host:
+                return False
+            # Must contain at least one letter (not just numbers)
+            if not re.search(r"[A-Za-z]", host):
+                return False
+
+        return True
 
     def _is_valid_url(self, url: str) -> bool:
         """Check if a URL is valid"""

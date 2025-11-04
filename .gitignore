@@ -2,6 +2,8 @@
 .kiro
 .cursor
 .windsurf
+*.old
+*.db
 
 node_modules
 

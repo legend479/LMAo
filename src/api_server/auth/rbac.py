@@ -7,7 +7,7 @@ from typing import Dict, List, Set, Optional
 from enum import Enum
 from dataclasses import dataclass
 
-from ...shared.logging import get_logger
+from src.shared.logging import get_logger
 
 logger = get_logger(__name__)
 

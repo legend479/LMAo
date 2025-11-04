@@ -23,7 +23,7 @@ from .content_generation import (
     ContentGenerationRequest,
     ComplexityLevel,
 )
-from .tools.readability_scoring import ReadabilityScorer
+from .tools.readability_scoring import ReadabilityCalculator
 from src.shared.logging import get_logger
 
 logger = get_logger(__name__)
@@ -1422,7 +1422,7 @@ class EducationalContentPipeline:
         self.quiz_generator = None
         self.lab_generator = None
         self.doc_generator = None
-        self.readability_scorer = ReadabilityScorer()
+        self.readability_scorer = ReadabilityCalculator()
         self._initialized = False
 
     async def initialize(self):

@@ -14,8 +14,9 @@ import signal
 
 from .routers import health, chat, documents, tools, auth, admin
 from .middleware import security, logging, rate_limiting, validation, compression
-from ..shared.config import get_settings, validate_config
-from ..shared.logging import get_logger
+
+from src.shared.config import get_settings, validate_config
+from src.shared.logging import get_logger
 
 logger = get_logger(__name__)
 

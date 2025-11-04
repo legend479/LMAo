@@ -142,7 +142,7 @@ class Settings(BaseSettings):
     metrics_port: int = Field(default=9090, description="Metrics server port")
 
     model_config = ConfigDict(
-        env_file=".env", env_file_encoding="utf-8", case_sensitive=False
+        env_file=".env", env_file_encoding="utf-8", case_sensitive=False, frozen=True
     )
 
 
@@ -161,11 +161,16 @@ class ProductionSettings(Settings):
     log_level: str = "INFO"
     environment: str = "production"
 
-    # Override defaults for production
-    secret_key: str = Field(
-        ..., description="Secret key for JWT (required in production)"
-    )
-    database_url: str = Field(..., description="Database URL (required in production)")
+    def __init__(self, **kwargs):
+        # Check for required production fields
+        if (
+            "secret_key" not in kwargs
+            and os.getenv("SECRET_KEY") == "your-secret-key-change-in-production"
+        ):
+            raise ValueError("SECRET_KEY must be set for production environment")
+        if "database_url" not in kwargs and not os.getenv("DATABASE_URL"):
+            raise ValueError("DATABASE_URL must be set for production environment")
+        super().__init__(**kwargs)
 
 
 class TestingSettings(Settings):
