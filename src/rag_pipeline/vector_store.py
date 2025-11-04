@@ -265,6 +265,8 @@ class ElasticsearchStore:
                 index=self.index_name, body=self.document_mapping
             )
             logger.info(f"Created document index: {self.index_name}")
+        else:
+            logger.info(f"Document index already exists: {self.index_name}")
 
         # Create chunk index
         if not await self.client.indices.exists(index=self.chunk_index_name):
@@ -272,13 +274,28 @@ class ElasticsearchStore:
                 index=self.chunk_index_name, body=self.chunk_mapping
             )
             logger.info(f"Created chunk index: {self.chunk_index_name}")
+        else:
+            logger.info(f"Chunk index already exists: {self.chunk_index_name}")
 
     async def store_document(self, processed_doc: ProcessedDocument) -> str:
         """Store a processed document and its chunks"""
         if not self._initialized:
             await self.initialize()
 
-        logger.info("Storing document", doc_id=processed_doc.document_id)
+        logger.info(
+            "Storing document",
+            doc_id=processed_doc.document_id,
+            chunk_count=len(processed_doc.chunks),
+        )
+
+        # Debug: Log chunk details
+        for i, chunk in enumerate(processed_doc.chunks[:3]):  # Log first 3 chunks
+            logger.info(
+                f"Chunk {i}: id={chunk.chunk_id}, type={chunk.chunk_type}, content_length={len(chunk.content)}, content_preview='{chunk.content[:50]}...'"
+            )
+
+        if len(processed_doc.chunks) == 0:
+            logger.warning("No chunks to store! Document processing may have failed.")
 
         try:
             # Store document metadata
@@ -320,8 +337,8 @@ class ElasticsearchStore:
                     "size_category": chunk.metadata.get("size_category"),
                     "parent_chunk_id": chunk.parent_chunk_id,
                     "child_chunk_ids": chunk.child_chunk_ids,
-                    "start_index": chunk.start_index,
-                    "end_index": chunk.end_index,
+                    "start_index": chunk.start_char,
+                    "end_index": chunk.end_char,
                     "word_count": chunk.metadata.get("word_count", 0),
                     "char_count": chunk.metadata.get("char_count", 0),
                     "line_count": chunk.metadata.get("line_count", 0),
@@ -369,6 +386,9 @@ class ElasticsearchStore:
 
             # Bulk index chunks
             if chunk_operations:
+                logger.info(
+                    f"Bulk indexing {len(chunk_operations)//2} chunks to index '{self.chunk_index_name}'"
+                )
                 response = await self.client.bulk(body=chunk_operations)
 
                 # Check for errors
@@ -383,6 +403,12 @@ class ElasticsearchStore:
                         logger.error(
                             "Chunk indexing error", error=error["index"]["error"]
                         )
+                else:
+                    logger.info(
+                        f"Successfully indexed {len(chunk_operations)//2} chunks"
+                    )
+            else:
+                logger.warning("No chunk operations to perform - no chunks to index!")
 
             # Refresh indices to make documents searchable immediately
             await self.client.indices.refresh(
@@ -522,10 +548,21 @@ class ElasticsearchStore:
 
         # Execute search
         start_time = datetime.utcnow()
+
+        # Debug: Log the search query for hybrid search
+        logger.info(
+            f"Hybrid search on index '{self.chunk_index_name}' with query: {search_body}"
+        )
+
         response = await self.client.search(
             index=self.chunk_index_name, body=search_body
         )
         search_time = (datetime.utcnow() - start_time).total_seconds() * 1000
+
+        # Debug: Log the raw response for hybrid search
+        logger.info(
+            f"Hybrid search response: total_hits={response['hits']['total']['value']}, max_score={response['hits'].get('max_score')}"
+        )
 
         # Parse results
         results = []
@@ -588,10 +625,30 @@ class ElasticsearchStore:
                 }
 
         start_time = datetime.utcnow()
+
+        # Debug: Check total document count in index
+        try:
+            count_response = await self.client.count(index=self.chunk_index_name)
+            logger.info(
+                f"Total documents in index '{self.chunk_index_name}': {count_response['count']}"
+            )
+        except Exception as e:
+            logger.error(f"Failed to count documents in index: {e}")
+
+        # Debug: Log the search query for keyword search
+        logger.info(
+            f"Keyword search on index '{self.chunk_index_name}' with query: {search_body}"
+        )
+
         response = await self.client.search(
             index=self.chunk_index_name, body=search_body
         )
         search_time = (datetime.utcnow() - start_time).total_seconds() * 1000
+
+        # Debug: Log the raw response for keyword search
+        logger.info(
+            f"Keyword search response: total_hits={response['hits']['total']['value']}, max_score={response['hits'].get('max_score')}"
+        )
 
         # Parse results (similar to hybrid search)
         results = []
@@ -702,11 +759,33 @@ class ElasticsearchStore:
             await self.initialize()
 
         try:
+            # Check if indices exist
+            doc_index_exists = await self.client.indices.exists(index=self.index_name)
+            chunk_index_exists = await self.client.indices.exists(
+                index=self.chunk_index_name
+            )
+
+            logger.info(
+                f"Index existence: documents={doc_index_exists}, chunks={chunk_index_exists}"
+            )
+
             # Get document count
-            doc_count = await self.client.count(index=self.index_name)
+            doc_count = (
+                await self.client.count(index=self.index_name)
+                if doc_index_exists
+                else {"count": 0}
+            )
 
             # Get chunk count
-            chunk_count = await self.client.count(index=self.chunk_index_name)
+            chunk_count = (
+                await self.client.count(index=self.chunk_index_name)
+                if chunk_index_exists
+                else {"count": 0}
+            )
+
+            logger.info(
+                f"Document counts: documents={doc_count['count']}, chunks={chunk_count['count']}"
+            )
 
             # Get chunk type distribution
             chunk_agg = await self.client.search(

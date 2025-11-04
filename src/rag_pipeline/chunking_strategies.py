@@ -158,79 +158,104 @@ class ChunkQuality:
 
         elif chunk_type == "text":
             # For text: check if sentences are complete
-            sentences = [s.strip() for s in content.split(".") if s.strip()]
+            # Split by multiple sentence endings, not just periods
+            import re
+
+            sentences = [s.strip() for s in re.split(r"[.!?]+", content) if s.strip()]
             if not sentences:
                 return 0.0
 
             complete_sentences = 0
             for sentence in sentences:
                 # A complete sentence should start with capital and have reasonable length
-                if (
-                    len(sentence) > 10
-                    and sentence[0].isupper()
-                    and sentence.endswith((".", "!", "?", ":", ";"))
-                ):
+                if len(sentence) > 10 and sentence[0].isupper():
                     complete_sentences += 1
+                elif len(sentence) > 5:  # Give partial credit for shorter sentences
+                    complete_sentences += 0.5
 
-            return complete_sentences / len(sentences)
+            return min(complete_sentences / len(sentences), 1.0)
 
         return 0.8  # Default completeness for other types
 
     @staticmethod
     def _calculate_boundary_quality(content: str, context: str) -> float:
         """Calculate how well chunk boundaries are chosen"""
-        if not context:
-            return 0.8  # Default if no context
-
         # Check if chunk starts and ends at natural boundaries
-        start_score = 0.5
-        end_score = 0.5
+        start_score = 0.7  # Default decent score
+        end_score = 0.7  # Default decent score
+
+        content_stripped = content.strip()
+        if not content_stripped:
+            return 0.5
 
         # Good starting points
-        content_start = content.strip()[:50].lower()
+        content_start = content_stripped[:50].lower()
         if any(
             content_start.startswith(start)
-            for start in ["# ", "## ", "### ", "def ", "class ", "function ", "import "]
+            for start in [
+                "# ",
+                "## ",
+                "### ",
+                "def ",
+                "class ",
+                "function ",
+                "import ",
+                "- ",
+                "* ",
+            ]
         ):
             start_score = 1.0
-        elif content_start[0].isupper():
+        elif content_stripped[0].isupper():
+            start_score = 0.9
+        elif content_start.startswith(("the ", "a ", "an ", "this ", "that ")):
             start_score = 0.8
 
         # Good ending points
-        content_end = content.strip()[-50:].lower()
-        if any(content_end.endswith(end) for end in [".", "!", "?", "}", ")", "]"]):
+        content_end = content_stripped[-50:].lower()
+        if any(
+            content_end.endswith(end) for end in [".", "!", "?", "}", ")", "]", "\n"]
+        ):
             end_score = 1.0
         elif content_end.endswith(":"):
             end_score = 0.6  # Colon might indicate incomplete thought
+        elif len(content_stripped) > 50:  # Longer chunks get benefit of doubt
+            end_score = 0.8
 
         return (start_score + end_score) / 2
 
     @staticmethod
     def _calculate_readability(content: str) -> float:
-        """Calculate readability score (simplified Flesch-like metric)"""
+        """Calculate readability score (simplified and more forgiving)"""
         words = content.split()
-        sentences = content.split(".")
+        sentences = re.split(r"[.!?]+", content)
+        sentences = [s.strip() for s in sentences if s.strip()]
 
         if not words or not sentences:
-            return 0.0
+            return 0.5  # Give neutral score instead of 0
 
         avg_words_per_sentence = len(words) / len(sentences)
 
-        # Count syllables (simplified: count vowel groups)
-        syllables = 0
-        for word in words:
-            word_syllables = len(re.findall(r"[aeiouAEIOU]+", word))
-            syllables += max(word_syllables, 1)  # At least 1 syllable per word
+        # Simplified readability based on sentence length and word complexity
+        # Prefer moderate sentence lengths (10-25 words)
+        if 10 <= avg_words_per_sentence <= 25:
+            length_score = 1.0
+        elif 5 <= avg_words_per_sentence < 10 or 25 < avg_words_per_sentence <= 35:
+            length_score = 0.8
+        else:
+            length_score = 0.6
 
-        avg_syllables_per_word = syllables / len(words)
+        # Check for overly complex words (very long words might be technical terms)
+        complex_words = sum(1 for word in words if len(word) > 12)
+        complexity_ratio = complex_words / len(words)
 
-        # Simplified Flesch formula (higher is more readable)
-        flesch_score = (
-            206.835 - (1.015 * avg_words_per_sentence) - (84.6 * avg_syllables_per_word)
-        )
+        if complexity_ratio < 0.1:
+            complexity_score = 1.0
+        elif complexity_ratio < 0.2:
+            complexity_score = 0.8
+        else:
+            complexity_score = 0.6  # Technical content is still readable
 
-        # Normalize to 0-1 scale (assuming 0-100 Flesch scale)
-        return max(min(flesch_score / 100, 1.0), 0.0)
+        return (length_score + complexity_score) / 2
 
 
 class BaseChunkingStrategy(ABC):
@@ -249,6 +274,17 @@ class BaseChunkingStrategy(ABC):
     def _validate_chunk_quality(self, chunk: Chunk, context: str = "") -> bool:
         """Validate if chunk meets quality threshold"""
         quality = ChunkQuality.calculate(chunk, context)
+
+        # Log quality scores for debugging
+        logger.debug(
+            f"Chunk quality: overall={quality.overall_score:.3f}, "
+            f"coherence={quality.coherence_score:.3f}, "
+            f"completeness={quality.completeness_score:.3f}, "
+            f"boundary={quality.boundary_score:.3f}, "
+            f"readability={quality.readability_score:.3f}, "
+            f"threshold={self.config.quality_threshold}"
+        )
+
         return quality.overall_score >= self.config.quality_threshold
 
     def _create_chunk_metadata(
@@ -672,7 +708,7 @@ class HierarchicalChunkingStrategy(BaseChunkingStrategy):
             chunk_index=chunk_num,
             start_char=start_idx,
             end_char=end_idx,
-            metadata=metadata,
+            metadata=chunk_metadata,
             chunk_type="code",
             parent_chunk_id=parent_chunk_id,
         )
@@ -973,7 +1009,7 @@ class HierarchicalChunkingStrategy(BaseChunkingStrategy):
             chunk_index=chunk_num,
             start_char=0,  # Would need more context to calculate exact indices
             end_char=len(content),
-            metadata=metadata,
+            metadata=chunk_metadata,
             chunk_type="text",
             parent_chunk_id=parent_chunk_id,
         )

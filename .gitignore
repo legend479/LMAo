@@ -4,6 +4,7 @@
 .windsurf
 *.old
 *.db
+*.pkl
 
 node_modules
 

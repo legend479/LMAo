@@ -3,6 +3,7 @@ RAG Pipeline Main Module
 Specialized retrieval system optimized for software engineering content
 """
 
+import time
 from typing import Dict, Any, List, Optional
 
 from .models import ProcessedDocument, IngestionResult, Chunk, DocumentMetadata
@@ -126,14 +127,24 @@ class RAGPipeline:
                 "Generating embeddings for chunks",
                 chunk_count=len(processed_doc.chunks),
             )
-            for chunk in processed_doc.chunks:
-                embedding_result = await self.embedding_manager.generate_embeddings(
-                    chunk.content
-                )
-                chunk.embeddings = {
-                    "general": embedding_result.general_embedding,
-                    "domain": embedding_result.domain_embedding,
-                }
+            for i, chunk in enumerate(processed_doc.chunks):
+                try:
+                    embedding_result = await self.embedding_manager.generate_embeddings(
+                        chunk.content
+                    )
+                    chunk.embeddings = {
+                        "general": embedding_result.general_embedding,
+                        "domain": embedding_result.domain_embedding,
+                    }
+                    logger.debug(
+                        f"Generated embeddings for chunk {i+1}/{len(processed_doc.chunks)}"
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to generate embeddings for chunk {i+1}: {e}"
+                    )
+                    # Continue without embeddings - chunks can still be stored for keyword search
+                    chunk.embeddings = None
 
             # Store in vector database
             stored_doc_id = await self.vector_store.store_document(processed_doc)
@@ -205,25 +216,56 @@ class RAGPipeline:
 
         logger.info("Starting directory ingestion", source_paths=source_paths)
 
-        # Use ingestion service to process directories
-        result = await self.ingestion_service.ingest_documents(source_paths)
+        # Discover files first
+        all_files = []
+        for source_path in source_paths:
+            discovered_files = await self.ingestion_service.discover_documents(
+                source_path
+            )
+            all_files.extend([file_path for file_path, _ in discovered_files])
+
+        logger.info(f"Discovered {len(all_files)} files for full pipeline ingestion")
+
+        # Process each file through the complete pipeline (including embeddings and storage)
+        successful = 0
+        failed = 0
+        errors = []
+        start_time = time.time()
+
+        for file_path in all_files:
+            try:
+                logger.info(f"Processing file through full pipeline: {file_path}")
+                result = await self.ingest_document(file_path)
+                if result.get("status") == "success":
+                    successful += 1
+                else:
+                    failed += 1
+                    errors.append(
+                        f"Failed to process {file_path}: {result.get('error', 'Unknown error')}"
+                    )
+            except Exception as e:
+                failed += 1
+                errors.append(f"Failed to process {file_path}: {str(e)}")
+                logger.error(f"Error processing {file_path}: {e}")
+
+        processing_time = time.time() - start_time
 
         logger.info(
             "Directory ingestion completed",
-            total_found=result.total_files_found,
-            successful=result.successful_ingestions,
-            failed=result.failed_ingestions,
+            total_found=len(all_files),
+            successful=successful,
+            failed=failed,
         )
 
         return {
-            "total_files_found": result.total_files_found,
-            "total_files_processed": result.total_files_processed,
-            "successful_ingestions": result.successful_ingestions,
-            "failed_ingestions": result.failed_ingestions,
-            "skipped_files": result.skipped_files,
-            "processing_time": result.processing_time,
-            "file_statistics": result.file_statistics,
-            "errors": result.errors,
+            "total_files_found": len(all_files),
+            "total_files_processed": len(all_files),
+            "successful_ingestions": successful,
+            "failed_ingestions": failed,
+            "skipped_files": 0,
+            "processing_time": processing_time,
+            "file_statistics": {"total": len(all_files)},
+            "errors": errors,
         }
 
     async def search(
