@@ -5,7 +5,7 @@
 *.old
 *.db
 *.pkl
-
+*.embedding_cache
 node_modules
 
 # Byte-compiled / optimized / DLL files

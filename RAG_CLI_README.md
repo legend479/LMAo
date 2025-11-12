@@ -40,7 +40,7 @@ The script automatically:
 
 **Elasticsearch not running:**
 ```bash
-docker run -p 9200:9200 -e "discovery.type=single-node" elasticsearch:8.11.0
+docker run -p 9200:9200 -e "discovery.type=single-node" -e "xpack.security.enabled=false" elasticsearch:8.11.0
 ```
 
 **Missing dependencies:**

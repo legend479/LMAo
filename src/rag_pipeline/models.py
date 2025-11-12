@@ -74,7 +74,7 @@ class Chunk:
     chunk_type: str = "text"
     parent_chunk_id: Optional[str] = None
     child_chunk_ids: List[str] = None
-    embedding: Optional[List[float]] = None
+    embeddings: Optional[Dict[str, Any]] = None  # Dual embeddings (general + domain)
     quality_score: Optional[float] = None
     semantic_density: Optional[float] = None
 

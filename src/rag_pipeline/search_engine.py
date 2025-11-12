@@ -72,7 +72,9 @@ class HybridSearchEngine:
         config: SearchConfig = None,
     ):
         self.vector_store = vector_store
-        self.embedding_manager = embedding_manager  # Will be set by RAG pipeline
+        self.embedding_manager = (
+            embedding_manager  # Set by RAG pipeline during initialization
+        )
         self.config = config or SearchConfig()
         self._initialized = False
 
@@ -180,16 +182,19 @@ class HybridSearchEngine:
         # Execute multiple search strategies in parallel
         search_tasks = []
 
-        # Keyword search
+        # Keyword search (BM25)
         search_tasks.append(
             self.vector_store.search_chunks(query, filters, max_results * 2, "keyword")
         )
 
-        # Vector search (placeholder - will be enhanced in task 2.4)
-        # For now, we'll use a different keyword search with different parameters
-        search_tasks.append(
-            self._alternative_keyword_search(query, filters, max_results * 2)
-        )
+        # Vector search (semantic similarity) - if embedding manager is available
+        if self.embedding_manager:
+            search_tasks.append(self._vector_search(query, filters, max_results * 2))
+        else:
+            # Fallback to alternative keyword search if no embeddings
+            search_tasks.append(
+                self._alternative_keyword_search(query, filters, max_results * 2)
+            )
 
         # Execute searches concurrently
         search_results = await asyncio.gather(*search_tasks, return_exceptions=True)
@@ -262,10 +267,10 @@ class HybridSearchEngine:
     async def _alternative_keyword_search(
         self, query: str, filters: Optional[Dict[str, Any]], max_results: int
     ) -> SearchResponse:
-        """Alternative keyword search with different parameters"""
+        """Alternative keyword search with phrase matching and wildcards"""
 
-        # This is a placeholder for vector search
-        # For now, we'll do a phrase-based keyword search as an alternative
+        # Phrase-based keyword search provides different ranking than standard BM25
+        # This diversity improves RRF fusion results
         search_body = {
             "size": max_results,
             "query": {
@@ -328,98 +333,12 @@ class HybridSearchEngine:
     async def _vector_search(
         self, query: str, filters: Optional[Dict[str, Any]], max_results: int
     ) -> SearchResponse:
-        """Vector-based semantic search using embeddings"""
+        """Vector-based semantic search using embeddings - delegates to vector_store"""
 
-        if not self.embedding_manager:
-            logger.warning(
-                "Embedding manager not available - falling back to keyword search"
-            )
-            return await self._keyword_search(query, filters, max_results)
-
-        try:
-            # Generate query embedding
-            query_embedding_result = await self.embedding_manager.generate_embeddings(
-                query
-            )
-
-            # Use general embedding for vector search (can be made configurable)
-            query_vector = query_embedding_result.general_embedding
-            if query_vector is None:
-                logger.warning(
-                    "Failed to generate query embedding - falling back to keyword search"
-                )
-                return await self._keyword_search(query, filters, max_results)
-
-            # Construct vector search query
-            search_body = {
-                "size": max_results,
-                "query": {
-                    "script_score": {
-                        "query": {"match_all": {}},
-                        "script": {
-                            "source": "cosineSimilarity(params.query_vector, 'embedding_general') + 1.0",
-                            "params": {"query_vector": query_vector.tolist()},
-                        },
-                    }
-                },
-                "_source": {"excludes": ["embedding_general", "embedding_domain"]},
-            }
-
-            # Add filters if provided
-            if filters:
-                filter_clauses = []
-
-                if "document_category" in filters:
-                    filter_clauses.append(
-                        {"term": {"document_category": filters["document_category"]}}
-                    )
-
-                if "chunk_type" in filters:
-                    filter_clauses.append(
-                        {"term": {"chunk_type": filters["chunk_type"]}}
-                    )
-
-                if filter_clauses:
-                    search_body["query"]["script_score"]["query"] = {
-                        "bool": {"filter": filter_clauses}
-                    }
-
-            # Execute search
-            start_time = datetime.utcnow()
-            response = await self.vector_store.client.search(
-                index=self.vector_store.chunk_index_name, body=search_body
-            )
-            search_time = (datetime.utcnow() - start_time).total_seconds() * 1000
-
-            # Parse results
-            results = []
-            for hit in response["hits"]["hits"]:
-                source = hit["_source"]
-                result = SearchResult(
-                    chunk_id=source["chunk_id"],
-                    content=source["content"],
-                    score=hit["_score"],
-                    metadata=source,
-                    document_id=source["document_id"],
-                    chunk_type=source["chunk_type"],
-                    parent_chunk_id=source.get("parent_chunk_id"),
-                    highlights={},
-                )
-                results.append(result)
-
-            return SearchResponse(
-                results=results,
-                total_hits=response["hits"]["total"]["value"],
-                max_score=response["hits"]["max_score"] or 0.0,
-                took_ms=int(search_time),
-                query=query,
-                search_type="vector",
-            )
-
-        except Exception as e:
-            logger.error(f"Vector search failed: {e}")
-            logger.warning("Falling back to keyword search")
-            return await self._keyword_search(query, filters, max_results)
+        # Delegate to vector_store's vector search implementation
+        return await self.vector_store.search_chunks(
+            query, filters, max_results, "vector"
+        )
 
     def _apply_rrf_fusion(
         self, search_responses: List[SearchResponse], query: str

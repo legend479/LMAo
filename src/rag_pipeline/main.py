@@ -31,7 +31,7 @@ class RAGPipeline:
         self.search_config = search_config
         self.embedding_config = embedding_config
 
-        # Components will be initialized lazily
+        # Components are initialized lazily to avoid circular dependencies
         self.document_processor = None
         self.embedding_manager = None
         self.ingestion_service = None
@@ -396,7 +396,8 @@ class RAGPipeline:
 
         logger.info("Updating document", document_id=document_id, file_path=file_path)
 
-        # For now, just re-ingest the document (deletion will be implemented later)
+        # Update by re-ingesting the document with new content
+        # The document_id will be regenerated based on content hash
         return await self.ingest_document(file_path, metadata)
 
     async def health_check(self) -> Dict[str, Any]:

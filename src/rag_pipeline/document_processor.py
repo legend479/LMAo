@@ -27,28 +27,10 @@ from src.shared.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Forward declaration for chunking manager - will be imported when needed
-ChunkingManager = None
+# ChunkingManager is imported lazily to avoid circular dependencies
 
 
-# DocumentMetadata is imported from models.py
-
-
-@dataclass
-class Chunk:
-    content: str
-    chunk_id: str
-    start_index: int
-    end_index: int
-    chunk_type: str  # text, code, table, list, header, etc.
-    metadata: Dict[str, Any]
-    parent_chunk_id: Optional[str] = None
-    child_chunk_ids: List[str] = None
-    embeddings: Optional[Dict[str, Any]] = None
-
-    def __post_init__(self):
-        if self.child_chunk_ids is None:
-            self.child_chunk_ids = []
+# DocumentMetadata and Chunk are imported from models.py
 
 
 @dataclass

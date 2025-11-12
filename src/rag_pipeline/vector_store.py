@@ -67,7 +67,9 @@ class ElasticsearchStore:
     def __init__(self, config: ElasticsearchConfig = None, embedding_manager=None):
         self.config = config or ElasticsearchConfig()
         self.client: Optional[AsyncElasticsearch] = None
-        self.embedding_manager = embedding_manager  # Will be set by RAG pipeline
+        self.embedding_manager = (
+            embedding_manager  # Set by RAG pipeline during initialization
+        )
         self.index_name = "se_sme_documents"
         self.chunk_index_name = "se_sme_chunks"
         self._initialized = False
@@ -164,7 +166,7 @@ class ElasticsearchStore:
                     "document_category": {"type": "keyword"},
                     "document_creation_date": {"type": "date"},
                     "mime_type": {"type": "keyword"},
-                    # Vector embeddings (will be added when embedding system is implemented)
+                    # Vector embeddings for semantic search
                     "embedding_general": {
                         "type": "dense_vector",
                         "dims": 768,  # all-mpnet-base-v2 dimensions
@@ -463,9 +465,7 @@ class ElasticsearchStore:
     ) -> SearchResponse:
         """Hybrid search combining keyword and vector search"""
 
-        # For now, implement keyword search (vector search will be added in task 2.4)
-        # This is a placeholder that will be enhanced when embeddings are implemented
-
+        # Keyword-based search with multi-field matching and technical content support
         search_body = {
             "size": max_results,
             "query": {
@@ -678,13 +678,134 @@ class ElasticsearchStore:
     async def _vector_search(
         self, query: str, filters: Optional[Dict[str, Any]], max_results: int
     ) -> SearchResponse:
-        """Vector-based semantic search (placeholder for task 2.4)"""
+        """Vector-based semantic search using embeddings"""
 
-        # This will be implemented in task 2.4 when embeddings are added
-        logger.warning(
-            "Vector search not yet implemented - falling back to keyword search"
-        )
-        return await self._keyword_search(query, filters, max_results)
+        # Vector search requires embedding manager to be available
+        if not self.embedding_manager:
+            logger.warning(
+                "Embedding manager not available - falling back to keyword search"
+            )
+            return await self._keyword_search(query, filters, max_results)
+
+        logger.info("Performing vector similarity search", query=query[:100])
+        start_time = datetime.utcnow()
+
+        try:
+            # Determine if we should use domain embeddings for code queries
+            use_domain_embedding = self._looks_like_code_query(query)
+
+            # Generate appropriate embeddings for the query
+            embedding_result = await self.embedding_manager.generate_embeddings(
+                query,
+                include_general=not use_domain_embedding,  # Only include general if not using domain
+                include_domain=use_domain_embedding,  # Only include domain if needed
+            )
+
+            # Select the appropriate embedding based on query type
+            if use_domain_embedding:
+                logger.debug("Using domain-specific embeddings for code-like query")
+                query_embedding = embedding_result.domain_embedding.tolist()
+                embedding_field = "embedding_domain"
+            else:
+                query_embedding = embedding_result.general_embedding.tolist()
+                embedding_field = "embedding_general"
+
+            # Build the k-NN query
+            knn_query = {
+                "field": embedding_field,
+                "query_vector": query_embedding,
+                "k": max_results,
+                "num_candidates": max(
+                    100, max_results * 10
+                ),  # Consider more candidates for better recall
+            }
+
+            # Build the search request
+            search_body = {
+                "knn": knn_query,
+                "size": max_results,
+                "_source": {
+                    "excludes": [
+                        "embedding_general",
+                        "embedding_domain",  # Exclude large embedding fields
+                    ]
+                },
+            }
+
+            # Add filters if provided
+            if filters:
+                filter_clauses = []
+
+                if "document_category" in filters:
+                    filter_clauses.append(
+                        {"term": {"document_category": filters["document_category"]}}
+                    )
+
+                if "chunk_type" in filters:
+                    filter_clauses.append(
+                        {"term": {"chunk_type": filters["chunk_type"]}}
+                    )
+
+                if "size_category" in filters:
+                    filter_clauses.append(
+                        {"term": {"size_category": filters["size_category"]}}
+                    )
+
+                if "date_range" in filters:
+                    date_filter = {"range": {"document_creation_date": {}}}
+                    if "gte" in filters["date_range"]:
+                        date_filter["range"]["document_creation_date"]["gte"] = filters[
+                            "date_range"
+                        ]["gte"]
+                    if "lte" in filters["date_range"]:
+                        date_filter["range"]["document_creation_date"]["lte"] = filters[
+                            "date_range"
+                        ]["lte"]
+                    filter_clauses.append(date_filter)
+
+                if filter_clauses:
+                    search_body["query"] = {"bool": {"filter": filter_clauses}}
+
+            # Execute the search
+            logger.debug("Executing vector search", search_body=search_body)
+            response = await self.client.search(
+                index=self.chunk_index_name, body=search_body
+            )
+
+            search_time = (datetime.utcnow() - start_time).total_seconds() * 1000
+            logger.info(
+                f"Vector search completed in {search_time:.2f}ms with {len(response['hits']['hits'])} results"
+            )
+
+            # Process and return results
+            results = []
+            for hit in response["hits"]["hits"]:
+                source = hit["_source"]
+                result = SearchResult(
+                    chunk_id=source["chunk_id"],
+                    content=source["content"],
+                    score=hit["_score"],
+                    metadata=source,
+                    document_id=source["document_id"],
+                    chunk_type=source["chunk_type"],
+                    parent_chunk_id=source.get("parent_chunk_id"),
+                )
+                results.append(result)
+
+            return SearchResponse(
+                results=results,
+                total_hits=response["hits"]["total"]["value"],
+                max_score=response["hits"]["max_score"] or 0.0,
+                took_ms=int(search_time),
+                query=query,
+                search_type="vector",
+            )
+
+        except Exception as e:
+            logger.error("Vector search failed", query=query[:100], error=str(e))
+            # Fall back to keyword search if vector search fails
+            logger.warning("Falling back to keyword search due to vector search error")
+            return await self._keyword_search(query, filters, max_results)
 
     def _looks_like_code_query(self, query: str) -> bool:
         """Heuristic to determine if query is looking for code"""
