@@ -263,8 +263,16 @@ def get_elasticsearch_config() -> dict:
     """Get Elasticsearch configuration"""
     settings = get_settings()
 
+    # Construct proper URL with scheme
+    host = settings.elasticsearch_host
+    port = settings.elasticsearch_port
+
+    # Add http:// scheme if not present
+    if not host.startswith(("http://", "https://")):
+        host = f"http://{host}"
+
     return {
-        "hosts": [f"{settings.elasticsearch_host}:{settings.elasticsearch_port}"],
+        "hosts": [f"{host}:{port}"],
         "timeout": 30,
         "max_retries": 3,
         "retry_on_timeout": True,

@@ -498,6 +498,113 @@ class ToolRegistryManager:
         self.recommendation_engine = RecommendationEngine(self.db)
         self.version_manager = VersionManager(self.db)
         self.analytics_engine = AnalyticsEngine(self.db)
+        self._initialized = False
+
+    async def initialize(self):
+        """Initialize the tool registry"""
+        if self._initialized:
+            return
+
+        logger.info("Initializing Tool Registry Manager")
+
+        # Load existing tools from database
+        try:
+            existing_tools = await self.db.list_tools(limit=1000)
+            for tool_metadata in existing_tools:
+                self.tool_cache[tool_metadata.id] = tool_metadata
+
+            logger.info(f"Loaded {len(existing_tools)} tools from database")
+        except Exception as e:
+            logger.warning(f"Failed to load tools from database: {str(e)}")
+
+        self._initialized = True
+        logger.info("Tool Registry Manager initialized successfully")
+
+    async def shutdown(self):
+        """Shutdown the tool registry and cleanup resources"""
+        logger.info("Shutting down Tool Registry Manager")
+
+        # Cleanup active tools
+        for tool_id, tool in self.active_tools.items():
+            try:
+                if hasattr(tool, "cleanup"):
+                    await tool.cleanup()
+            except Exception as e:
+                logger.error(f"Error cleaning up tool {tool_id}: {str(e)}")
+
+        self.active_tools.clear()
+        self.tool_cache.clear()
+
+        logger.info("Tool Registry Manager shutdown complete")
+
+    async def list_tools(self) -> Dict[str, Any]:
+        """List all available tools for API response"""
+        try:
+            tools_metadata = await self.list_tools_metadata()
+
+            tools_list = []
+            for metadata in tools_metadata:
+                tools_list.append(
+                    {
+                        "id": metadata.id,
+                        "name": metadata.name,
+                        "description": metadata.description,
+                        "category": metadata.category,
+                        "version": metadata.version,
+                        "status": metadata.status.value,
+                        "tags": metadata.tags,
+                        "capabilities": {
+                            "primary": (
+                                metadata.capabilities.primary_capability.value
+                                if metadata.capabilities
+                                else None
+                            ),
+                            "secondary": (
+                                [
+                                    cap.value
+                                    for cap in metadata.capabilities.secondary_capabilities
+                                ]
+                                if metadata.capabilities
+                                else []
+                            ),
+                        },
+                        "usage_count": metadata.total_executions,
+                        "success_rate": (
+                            (
+                                metadata.successful_executions
+                                / max(metadata.total_executions, 1)
+                            )
+                            if metadata.total_executions > 0
+                            else 0.0
+                        ),
+                    }
+                )
+
+            return {
+                "tools": tools_list,
+                "total_count": len(tools_list),
+                "active_count": len([t for t in tools_list if t["status"] == "active"]),
+            }
+        except Exception as e:
+            logger.error(f"Failed to list tools: {str(e)}")
+            return {"tools": [], "total_count": 0, "active_count": 0}
+
+    async def list_tools_metadata(
+        self,
+        status: Optional[ToolStatus] = None,
+        category: Optional[str] = None,
+        tags: List[str] = None,
+        limit: int = 100,
+    ) -> List[ToolMetadata]:
+        """List tools with filtering options (renamed from list_tools)"""
+
+        tools = await self.db.list_tools(status, category, limit)
+
+        # Filter by tags if specified
+        if tags:
+            tools = [tool for tool in tools if any(tag in tool.tags for tag in tags)]
+
+        return tools
 
     async def register_tool(
         self,
@@ -599,23 +706,6 @@ class ToolRegistryManager:
             self.tool_cache[tool_id] = metadata
 
         return metadata
-
-    async def list_tools(
-        self,
-        status: Optional[ToolStatus] = None,
-        category: Optional[str] = None,
-        tags: List[str] = None,
-        limit: int = 100,
-    ) -> List[ToolMetadata]:
-        """List tools with filtering options"""
-
-        tools = await self.db.list_tools(status, category, limit)
-
-        # Filter by tags if specified
-        if tags:
-            tools = [tool for tool in tools if any(tag in tool.tags for tag in tags)]
-
-        return tools
 
     async def search_tools(self, query: str, limit: int = 20) -> List[ToolMetadata]:
         """Search tools by name, description, or tags"""

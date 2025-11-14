@@ -340,19 +340,34 @@ class LangGraphOrchestrator:
 
         except Exception as e:
             execution_time = asyncio.get_event_loop().time() - start_time
-            logger.error("Plan execution failed", plan_id=plan.plan_id, error=str(e))
+
+            # Log detailed error information
+            import traceback
+
+            error_traceback = traceback.format_exc()
+            logger.error(
+                "Plan execution failed",
+                plan_id=plan.plan_id,
+                error=str(e),
+                error_type=type(e).__name__,
+                traceback=error_traceback,
+            )
 
             # Mark execution as failed
             if execution_id in self.active_executions:
                 self.active_executions[execution_id]["state"] = ExecutionState.FAILED
 
             return ExecutionResult(
-                response=f"I encountered an error while processing your request: {str(e)}",
+                response=f"I encountered an error while processing your request: {str(e) if str(e) else type(e).__name__}",
                 metadata={
                     "error": True,
                     "plan_id": plan.plan_id,
                     "execution_id": execution_id,
                     "error_type": type(e).__name__,
+                    "error_message": str(e),
+                    "error_traceback": (
+                        error_traceback if str(e) else "No error message available"
+                    ),
                 },
                 execution_time=execution_time,
                 state=ExecutionState.FAILED,

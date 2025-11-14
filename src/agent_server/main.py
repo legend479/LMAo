@@ -40,6 +40,15 @@ class AgentServer:
         await self.memory_manager.initialize()
         await self.tool_registry.initialize()
 
+        # Auto-register default tools
+        try:
+            from .tools.auto_register import register_default_tools
+
+            registered_tool_ids = await register_default_tools(self.tool_registry)
+            logger.info(f"Auto-registered {len(registered_tool_ids)} default tools")
+        except Exception as e:
+            logger.warning(f"Failed to auto-register tools: {str(e)}")
+
         self._initialized = True
         logger.info("Agent Server initialized successfully")
 

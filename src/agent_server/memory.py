@@ -564,10 +564,9 @@ class MemoryManager:
         # Get user preferences
         preferences = {}
         if user_profile:
+            # user_profile.preferences is already a dict, no need for asdict()
             preferences = (
-                asdict(user_profile.preferences)
-                if hasattr(user_profile, "preferences")
-                else {}
+                user_profile.preferences if hasattr(user_profile, "preferences") else {}
             )
 
         # Determine current topic

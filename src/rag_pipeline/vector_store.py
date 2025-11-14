@@ -58,7 +58,8 @@ class ElasticsearchConfig:
 
     def __post_init__(self):
         if self.hosts is None:
-            self.hosts = ["localhost:9200"]
+            # Default to http://localhost:9200 with proper scheme
+            self.hosts = ["http://localhost:9200"]
 
 
 class ElasticsearchStore:

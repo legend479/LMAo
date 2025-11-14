@@ -149,19 +149,15 @@ def _add_env_providers(providers: Dict[str, Dict[str, Any]]) -> None:
             "base_url": os.getenv("GOOGLE_BASE_URL"),
         }
 
-    # Ollama
+    # Ollama - Only add if explicitly configured
     ollama_url = os.getenv("OLLAMA_BASE_URL")
     if ollama_url and "ollama" not in providers:
         providers["ollama"] = {
             "base_url": ollama_url,
             "model": os.getenv("OLLAMA_MODEL", "llama2"),
         }
-    elif "ollama" not in providers:
-        # Check if Ollama is running on default port
-        providers["ollama"] = {
-            "base_url": "http://localhost:11434",
-            "model": os.getenv("OLLAMA_MODEL", "llama2"),
-        }
+    # Note: Removed automatic Ollama initialization
+    # Ollama will only be added if OLLAMA_BASE_URL is set in environment
 
 
 def _create_provider(provider_type: LLMProvider, config: Dict[str, Any]):

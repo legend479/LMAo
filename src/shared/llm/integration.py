@@ -95,7 +95,7 @@ class LLMIntegration:
                 elif default_provider == LLMProvider.ANTHROPIC:
                     model = "claude-3-haiku-20240307"
                 elif default_provider == LLMProvider.GOOGLE:
-                    model = "gemini-pro"
+                    model = "gemini-2.5-flash"
                 elif default_provider == LLMProvider.OLLAMA:
                     model = "llama2"
                 else:
