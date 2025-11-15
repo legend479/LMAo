@@ -68,14 +68,14 @@ async def readiness_check():
 
     # System is ready if overall status is healthy or degraded
     if system_health.overall_status in [HealthStatus.HEALTHY, HealthStatus.DEGRADED]:
-        return {"status": "ready", "timestamp": datetime.utcnow()}
+        return {"status": "ready", "timestamp": datetime.utcnow().isoformat()}
     else:
         raise HTTPException(
             status_code=503,
             detail={
                 "status": "not_ready",
                 "overall_status": system_health.overall_status.value,
-                "timestamp": datetime.utcnow(),
+                "timestamp": datetime.utcnow().isoformat(),
             },
         )
 
@@ -86,7 +86,7 @@ async def liveness_check():
     # Simple liveness check - if we can respond, we're alive
     return {
         "status": "alive",
-        "timestamp": datetime.utcnow(),
+        "timestamp": datetime.utcnow().isoformat(),
         "uptime": health_monitor.get_uptime(),
     }
 

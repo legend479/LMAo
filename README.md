@@ -111,7 +111,7 @@ integration = await get_llm_integration()
 async with integration.use_provider(LLMProvider.GOOGLE):
     response = await integration.generate_response(
         prompt="Analyze this code for security issues",
-        model="gemini-pro"
+        model="gemini-2.5-flash"
     )
 ```
 

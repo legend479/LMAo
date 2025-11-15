@@ -26,6 +26,7 @@ from src.agent_server.tools.registry import (
     ResourceRequirements,
     ToolResult,
     ExecutionContext,
+    PerformanceMetrics,
 )
 
 
@@ -103,17 +104,20 @@ def sample_metadata():
         version="1.0.0",
         description="A test tool for unit testing",
         author="test_author",
-        created_at=datetime.utcnow(),
-        updated_at=datetime.utcnow(),
-        status=ToolStatus.ACTIVE,
-        tags=["test", "mock"],
         category="testing",
-        dependencies=[],
         capabilities=ToolCapabilities(
             primary_capability=ToolCapability.CONTENT_GENERATION,
             secondary_capabilities=[ToolCapability.VALIDATION],
         ),
         resource_requirements=ResourceRequirements(),
+        performance_metrics=PerformanceMetrics(),
+        parameters={"input": {"type": "string", "description": "Input parameter"}},
+        required_params=["input"],
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
+        status=ToolStatus.ACTIVE,
+        tags=["test", "mock"],
+        dependencies=[],
         schema={"name": "Test Tool"},
         total_executions=10,
         successful_executions=9,
@@ -177,14 +181,20 @@ class TestToolDatabase:
                 version="1.0.0",
                 description=f"Test tool {i}",
                 author="test",
+                category="test",
+                capabilities=ToolCapabilities(
+                    primary_capability=ToolCapability.CONTENT_GENERATION,
+                    secondary_capabilities=[],
+                ),
+                resource_requirements=ResourceRequirements(),
+                performance_metrics=PerformanceMetrics(),
+                parameters={},
+                required_params=[],
                 created_at=datetime.utcnow(),
                 updated_at=datetime.utcnow(),
                 status=ToolStatus.ACTIVE if i < 2 else ToolStatus.DEPRECATED,
-                category="test",
                 tags=[],
                 dependencies=[],
-                capabilities=None,
-                resource_requirements=None,
                 schema={},
             )
             tools.append(tool)
@@ -353,17 +363,21 @@ class TestToolRegistryManager:
         await registry_manager.update_tool_status(inactive_id, ToolStatus.INACTIVE)
 
         # List all tools
-        all_tools = await registry_manager.list_tools()
+        all_tools = await registry_manager.list_tools_metadata()
         assert len(all_tools) >= 2
 
         # List only active tools
-        active_tools = await registry_manager.list_tools(status=ToolStatus.ACTIVE)
+        active_tools = await registry_manager.list_tools_metadata(
+            status=ToolStatus.ACTIVE
+        )
         active_ids = [t.id for t in active_tools]
         assert active_id in active_ids
         assert inactive_id not in active_ids
 
         # List only inactive tools
-        inactive_tools = await registry_manager.list_tools(status=ToolStatus.INACTIVE)
+        inactive_tools = await registry_manager.list_tools_metadata(
+            status=ToolStatus.INACTIVE
+        )
         inactive_ids = [t.id for t in inactive_tools]
         assert inactive_id in inactive_ids
         assert active_id not in inactive_ids
@@ -445,14 +459,20 @@ class TestPerformanceMonitor:
                 version="1.0.0",
                 description="Performance test tool",
                 author="test",
+                category="performance",
+                capabilities=ToolCapabilities(
+                    primary_capability=ToolCapability.CONTENT_GENERATION,
+                    secondary_capabilities=[],
+                ),
+                resource_requirements=ResourceRequirements(),
+                performance_metrics=PerformanceMetrics(),
+                parameters={},
+                required_params=[],
                 created_at=datetime.utcnow(),
                 updated_at=datetime.utcnow(),
                 status=ToolStatus.ACTIVE,
-                category="performance",
                 tags=[],
                 dependencies=[],
-                capabilities=None,
-                resource_requirements=None,
                 schema={},
             )
             await db.save_tool(metadata)
@@ -482,25 +502,33 @@ class TestRecommendationEngine:
         db = ToolDatabase(temp_db)
         engine = RecommendationEngine(db)
 
-        # Create some tools
-        for i in range(3):
+        # Create and save tools with different characteristics
+        for i in range(5):
             metadata = ToolMetadata(
                 id=f"rec_tool_{i}",
                 name=f"Recommendation Tool {i}",
                 version="1.0.0",
                 description="Recommendation test tool",
                 author="test",
+                category="recommendation",
+                capabilities=ToolCapabilities(
+                    primary_capability=ToolCapability.CONTENT_GENERATION,
+                    secondary_capabilities=[],
+                ),
+                resource_requirements=ResourceRequirements(),
+                performance_metrics=PerformanceMetrics(),
+                parameters={},
+                required_params=[],
                 created_at=datetime.utcnow(),
                 updated_at=datetime.utcnow(),
                 status=ToolStatus.ACTIVE,
-                category="recommendation",
                 tags=[f"tag_{i}"],
                 dependencies=[],
-                capabilities=None,
-                resource_requirements=None,
                 schema={},
                 total_executions=10 + i,
                 successful_executions=9 + i,
+                failed_executions=1,
+                avg_execution_time=1.0 + i * 0.1,
                 user_rating=4.0 + i * 0.2,
             )
             await db.save_tool(metadata)

@@ -10,7 +10,7 @@ from fastapi import (
     Depends,
     HTTPException,
 )
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 import json
@@ -43,11 +43,19 @@ class ChatResponse(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
     processing_time: Optional[float] = None
 
+    @field_serializer("timestamp")
+    def serialize_timestamp(self, value: datetime) -> str:
+        return value.isoformat()
+
 
 class WebSocketMessage(BaseModel):
     type: str  # message, status, error, typing, etc.
     data: Dict[str, Any]
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+    @field_serializer("timestamp")
+    def serialize_timestamp(self, value: datetime) -> str:
+        return value.isoformat()
 
 
 class ChatSession(BaseModel):
@@ -227,7 +235,7 @@ async def send_message(
             await manager.send_json_message(
                 {
                     "type": "message",
-                    "data": response.dict(),
+                    "data": response.model_dump(),
                     "timestamp": datetime.utcnow().isoformat(),
                 },
                 session_id,
@@ -432,6 +440,12 @@ async def handle_ping(websocket: WebSocket, session_id: str):
         "timestamp": datetime.utcnow().isoformat(),
     }
     await manager.send_json_message(pong_message, session_id)
+
+
+@router.get("/test")
+async def test_endpoint():
+    """Test endpoint to verify response handling"""
+    return {"message": "test response"}
 
 
 @router.get("/sessions", response_model=List[ChatSession])

@@ -311,7 +311,8 @@ class HealthMonitor:
         """Determine overall system health from component results"""
 
         if not results:
-            return HealthStatus.UNKNOWN
+            # If no components are registered, assume healthy (service is running)
+            return HealthStatus.HEALTHY
 
         statuses = [result.status for result in results]
 

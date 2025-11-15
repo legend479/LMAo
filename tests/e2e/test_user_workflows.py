@@ -351,7 +351,7 @@ class TestResearchWorkflow:
         }
 
         summary = await mock_research_system.generate_summary(session_id)
-        assert "AI ethics" in summary["summary"].lower()
+        assert "ai ethics" in summary["summary"].lower()
         assert len(summary["key_findings"]) > 0
         assert len(summary["recommendations"]) > 0
 

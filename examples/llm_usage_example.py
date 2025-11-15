@@ -53,7 +53,7 @@ async def multi_provider_example():
     # Create client with multiple providers
     providers = {
         "openai": {"api_key": "your-openai-key", "model": "gpt-3.5-turbo"},
-        "google": {"api_key": "your-google-key", "model": "gemini-pro"},
+        "google": {"api_key": "your-google-key", "model": "gemini-2.5-flash "},
         "ollama": {"base_url": "http://localhost:11434", "model": "llama2"},
     }
 
@@ -81,7 +81,7 @@ async def google_specific_example():
 
     # Create Google-only client
     client = await create_google_client(
-        api_key="your-google-api-key", model="gemini-pro"
+        api_key="your-google-api-key", model="gemini-2.5-flash "
     )
 
     # Use Google-specific features
@@ -99,7 +99,7 @@ async def google_specific_example():
     try:
         response = await client.chat(
             messages=messages,
-            model="gemini-pro",
+            model="gemini-2.5-flash ",
             temperature=0.7,
             # Google-specific parameters
             extra_params={
@@ -192,7 +192,7 @@ async def advanced_integration_example():
             "task": "explanation",
             "prompt": "Explain how machine learning works in simple terms",
             "provider": "google",
-            "model": "gemini-pro",
+            "model": "gemini-2.5-flash ",
             "temperature": 0.7,
         },
         {

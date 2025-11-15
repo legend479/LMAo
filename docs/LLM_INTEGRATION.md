@@ -96,7 +96,7 @@ integration = await get_llm_integration()
 async with integration.use_provider(LLMProvider.GOOGLE):
     response = await integration.generate_response(
         prompt="What are the benefits of containerization?",
-        model="gemini-pro",
+        model="gemini-2.5-flash ",
         temperature=0.5
     )
 ```
@@ -144,7 +144,7 @@ from src.shared.llm import create_google_client
 
 client = await create_google_client(
     api_key="your-google-api-key",
-    model="gemini-pro"
+    model="gemini-2.5-flash "
 )
 
 response = await client.simple_chat(

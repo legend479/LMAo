@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 import json
 import hashlib
 import time
+import uuid
 import sqlite3
 
 from src.shared.logging import get_logger
@@ -335,7 +336,12 @@ class ToolDatabase:
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
+
+                # First check if tool exists and get rowcount from tools table
                 cursor.execute("DELETE FROM tools WHERE id = ?", (tool_id,))
+                tools_deleted = cursor.rowcount
+
+                # Delete related records
                 cursor.execute(
                     "DELETE FROM tool_executions WHERE tool_id = ?", (tool_id,)
                 )
@@ -344,7 +350,8 @@ class ToolDatabase:
                     "DELETE FROM tool_versions WHERE tool_id = ?", (tool_id,)
                 )
                 conn.commit()
-                return cursor.rowcount > 0
+
+                return tools_deleted > 0
 
         except Exception as e:
             logger.error(
@@ -541,10 +548,17 @@ class ToolRegistryManager:
 
         logger.info("Tool Registry Manager shutdown complete")
 
-    async def list_tools(self) -> Dict[str, Any]:
-        """List all available tools for API response"""
+    async def list_tools(
+        self,
+        status: Optional[ToolStatus] = None,
+        category: Optional[str] = None,
+        limit: int = 100,
+    ) -> Dict[str, Any]:
+        """List all available tools for API response with optional filtering"""
         try:
-            tools_metadata = await self.list_tools_metadata()
+            tools_metadata = await self.list_tools_metadata(
+                status=status, category=category, limit=limit
+            )
 
             tools_list = []
             for metadata in tools_metadata:
@@ -1047,8 +1061,9 @@ class ToolRegistryManager:
     def _generate_tool_id(self, tool_name: str) -> str:
         """Generate unique tool ID"""
 
-        timestamp = str(int(time.time()))
-        hash_input = f"{tool_name}_{timestamp}"
+        timestamp = str(int(time.time() * 1000000))  # Microsecond precision
+        random_suffix = str(uuid.uuid4().hex[:4])  # Add random component
+        hash_input = f"{tool_name}_{timestamp}_{random_suffix}"
         tool_hash = hashlib.md5(hash_input.encode()).hexdigest()[:8]
 
         return f"tool_{tool_hash}"

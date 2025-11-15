@@ -30,7 +30,7 @@ async def create_llm_client(
         providers: Dict of provider configurations. If None, uses settings from config.
                   Format: {
                       "openai": {"api_key": "...", "model": "gpt-4"},
-                      "google": {"api_key": "...", "model": "gemini-pro"},
+                      "google": {"api_key": "...", "model": "gemini-2.5-flash "},
                       "ollama": {"base_url": "http://localhost:11434", "model": "llama2"}
                   }
 
@@ -145,7 +145,7 @@ def _add_env_providers(providers: Dict[str, Dict[str, Any]]) -> None:
     if google_key and "google" not in providers:
         providers["google"] = {
             "api_key": google_key,
-            "model": os.getenv("GOOGLE_MODEL", "gemini-pro"),
+            "model": os.getenv("GOOGLE_MODEL", "gemini-2.5-flash "),
             "base_url": os.getenv("GOOGLE_BASE_URL"),
         }
 
@@ -236,7 +236,7 @@ async def create_anthropic_client(
 
 
 async def create_google_client(
-    api_key: str, model: str = "gemini-pro", base_url: Optional[str] = None
+    api_key: str, model: str = "gemini-2.5-flash ", base_url: Optional[str] = None
 ) -> LLMClient:
     """Create Google AI-only client"""
     return await create_simple_client(

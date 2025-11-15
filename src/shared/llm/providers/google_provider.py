@@ -176,7 +176,10 @@ class GoogleProvider(BaseLLMProvider):
             return sorted(models)
         except Exception as e:
             logger.error(f"Failed to get Google AI models: {str(e)}")
-            return ["gemini-pro", "gemini-pro-vision"]  # Fallback to known models
+            return [
+                "gemini-2.5-flash ",
+                "gemini-2.5-flash -vision",
+            ]  # Fallback to known models
 
     def _convert_request(self, request: LLMRequest) -> Dict[str, Any]:
         """Convert LLMRequest to Google AI API format"""

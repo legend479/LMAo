@@ -54,7 +54,31 @@ async def app(test_settings):
     """Create test application."""
     # Override settings for testing
     os.environ["ENVIRONMENT"] = "testing"
-    return create_app()
+
+    # Clear settings cache to ensure fresh settings
+    from src.shared.config import get_settings
+
+    get_settings.cache_clear()
+
+    # Reset global service registry
+    import src.shared.services
+
+    src.shared.services._service_registry = None
+
+    app = create_app()
+
+    yield app
+
+    # Cleanup background tasks
+    try:
+        # Cleanup service registry
+        if src.shared.services._service_registry:
+            await src.shared.services._service_registry.shutdown()
+            src.shared.services._service_registry = None
+    except Exception:
+        pass  # Ignore cleanup errors
+
+    # Note: RateLimitingMiddleware cleanup is handled by its lifespan check for testing environment
 
 
 @pytest.fixture
@@ -241,6 +265,29 @@ def auth_headers():
 def admin_headers():
     """Mock admin authentication headers."""
     return {"Authorization": "Bearer mock_admin_jwt_token"}
+
+
+@pytest.fixture
+def mock_jwt_verification():
+    """Mock JWT verification for tests."""
+    from unittest.mock import patch, AsyncMock
+    from src.api_server.auth import TokenPayload
+    from datetime import datetime
+
+    with patch("src.api_server.routers.auth.jwt_manager") as mock_jwt:
+        # Mock successful token verification
+        mock_token_payload = TokenPayload(
+            user_id="test_user_123",
+            email="test@example.com",
+            roles=["user"],
+            permissions=["read", "write"],
+            session_id="test_session_123",
+            issued_at=datetime(2020, 1, 1),
+            expires_at=datetime(2100, 1, 1),
+            token_type="access",
+        )
+        mock_jwt.verify_token = AsyncMock(return_value=mock_token_payload)
+        yield mock_jwt
 
 
 # File fixtures
