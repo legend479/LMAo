@@ -150,7 +150,7 @@ class LangGraphOrchestrator:
 
         try:
             # Initialize Redis connection for state persistence
-            redis_url = getattr(self.settings, "REDIS_URL", "redis://localhost:6379")
+            redis_url = self.settings.redis_url
             self.redis_client = redis.from_url(redis_url, decode_responses=True)
 
             # Test Redis connection
