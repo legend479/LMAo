@@ -19,6 +19,7 @@ import uuid
 
 from .auth import get_current_active_user, User
 from src.shared.logging import get_logger
+from src.shared.services import get_agent_client
 
 logger = get_logger(__name__)
 router = APIRouter()
@@ -193,8 +194,6 @@ async def send_message(
     try:
         # Process message through agent server via HTTP client
         try:
-            from src.shared.services import get_agent_client
-
             agent_client = await get_agent_client()
 
             # Process the message through the agent service
@@ -385,8 +384,6 @@ async def handle_chat_message(
     try:
         # Process message through agent server via HTTP client
         try:
-            from src.shared.services import get_agent_client
-
             agent_client = await get_agent_client()
 
             # Process the message through the agent service

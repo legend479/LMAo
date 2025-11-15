@@ -65,6 +65,7 @@ async def app(test_settings):
 
     src.shared.services._service_registry = None
 
+    # Create app with testing environment
     app = create_app()
 
     yield app
@@ -77,6 +78,10 @@ async def app(test_settings):
             src.shared.services._service_registry = None
     except Exception:
         pass  # Ignore cleanup errors
+
+    # Clear environment after test
+    if "ENVIRONMENT" in os.environ:
+        del os.environ["ENVIRONMENT"]
 
     # Note: RateLimitingMiddleware cleanup is handled by its lifespan check for testing environment
 

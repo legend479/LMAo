@@ -17,45 +17,124 @@ from src.rag_pipeline.models import DocumentMetadata, ProcessedDocument, Chunk
 
 @pytest.fixture
 def temp_document():
-    """Create a temporary test document"""
+    """Create a temporary test document with sufficient content for chunking"""
     with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
-        f.write(
-            """
-# Test Document
+        # Write substantial content to ensure chunks are created
+        content = """# Software Engineering Best Practices
 
-This is a test document for RAG pipeline integration testing.
+This is a comprehensive test document for the RAG pipeline integration testing.
+It contains substantial content to ensure proper chunking and processing.
 
-## Section 1: Introduction
+## Section 1: Introduction to Software Engineering
 
-The RAG (Retrieval-Augmented Generation) pipeline is designed to process documents
-and enable semantic search capabilities. This document contains sample content
-for testing various components of the pipeline.
+Software engineering is a systematic approach to developing software applications.
+It involves various phases including requirements gathering, design, implementation,
+testing, and maintenance. The field has evolved significantly over the past decades,
+incorporating new methodologies and practices to improve software quality and development efficiency.
 
-## Section 2: Technical Details
+Modern software engineering emphasizes collaboration, automation, and continuous improvement.
+Teams work together using version control systems, continuous integration pipelines, and
+automated testing frameworks to deliver high-quality software products.
 
-The pipeline consists of several components:
-- Document processor for parsing various file formats
-- Embedding manager for generating vector representations
-- Vector store for storing and retrieving embeddings
-- Search engine for hybrid search capabilities
+## Section 2: Design Patterns and Architecture
 
-## Section 3: Code Example
+Design patterns are reusable solutions to common problems in software design. They represent
+best practices evolved over time by experienced software developers. Some fundamental patterns include:
 
-```python
-def example_function():
-    return "This is a code example for testing"
-```
+### Creational Patterns
+- Singleton: Ensures a class has only one instance and provides a global point of access to it
+- Factory Method: Defines an interface for creating objects but lets subclasses decide which class to instantiate
+- Builder: Separates the construction of a complex object from its representation
+
+### Structural Patterns
+- Adapter: Allows incompatible interfaces to work together
+- Decorator: Adds new functionality to objects dynamically
+- Facade: Provides a simplified interface to a complex subsystem
+
+### Behavioral Patterns
+- Observer: Defines a one-to-many dependency between objects
+- Strategy: Defines a family of algorithms and makes them interchangeable
+- Command: Encapsulates a request as an object
+
+## Section 3: Testing Methodologies
+
+Testing is a critical phase in software development that ensures the software meets specified
+requirements and functions correctly. Different types of testing serve different purposes:
+
+Unit Testing: Tests individual components or functions in isolation. Unit tests are fast,
+focused, and help catch bugs early in the development process. They form the foundation
+of a comprehensive testing strategy.
+
+Integration Testing: Verifies that different modules or services work together correctly.
+Integration tests catch issues that arise from the interaction between components, such as
+incorrect API contracts or data format mismatches.
+
+System Testing: Tests the complete integrated system to verify it meets specified requirements.
+This includes functional testing, performance testing, security testing, and usability testing.
+
+Acceptance Testing: Validates the system against business requirements and determines whether
+it's ready for deployment. This is often performed by end users or stakeholders.
+
+## Section 4: Version Control and Collaboration
+
+Version control systems like Git enable teams to collaborate effectively by tracking changes
+to source code over time. They provide features such as branching, merging, and conflict
+resolution that facilitate parallel development.
+
+Best practices for version control include:
+- Commit frequently with meaningful commit messages
+- Use feature branches for new development
+- Review code through pull requests before merging
+- Maintain a clean commit history
+- Tag releases for easy reference
+
+## Section 5: Continuous Integration and Deployment
+
+Continuous Integration (CI) and Continuous Deployment (CD) practices automate the process
+of building, testing, and deploying software. This leads to faster and more reliable releases.
+
+CI/CD pipelines typically include:
+- Automated builds triggered by code commits
+- Automated test execution at multiple levels
+- Code quality checks and static analysis
+- Security scanning for vulnerabilities
+- Automated deployment to staging and production environments
+
+## Section 6: Code Quality and Maintainability
+
+Writing clean, maintainable code is essential for long-term project success. Key principles include:
+
+SOLID Principles:
+- Single Responsibility: A class should have only one reason to change
+- Open/Closed: Software entities should be open for extension but closed for modification
+- Liskov Substitution: Subtypes must be substitutable for their base types
+- Interface Segregation: Clients should not depend on interfaces they don't use
+- Dependency Inversion: Depend on abstractions, not concretions
+
+Code should be self-documenting with clear naming conventions, appropriate comments,
+and comprehensive documentation. Regular refactoring helps maintain code quality and
+prevents technical debt from accumulating.
 
 ## Conclusion
 
 This document provides comprehensive test content for validating the RAG pipeline
-functionality across different content types and structures.
-        """
-        )
-        yield f.name
+functionality across different content types and structures. It includes sufficient
+text to generate multiple chunks during processing, enabling thorough testing of
+document ingestion, embedding generation, and search capabilities.
+
+The content covers various aspects of software engineering, providing diverse
+vocabulary and concepts that can be used to test semantic search and retrieval
+functionality. This ensures the RAG pipeline can handle real-world documentation
+and technical content effectively.
+"""
+        f.write(content)
+        temp_path = f.name
+
+    yield temp_path
 
     # Cleanup
-    os.unlink(f.name)
+    if os.path.exists(temp_path):
+        os.unlink(temp_path)
 
 
 @pytest.fixture

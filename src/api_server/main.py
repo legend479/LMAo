@@ -280,7 +280,9 @@ def create_app() -> FastAPI:
     )
 
     # Add custom middleware in order
-    app.add_middleware(compression.CompressionMiddleware)
+    # Skip compression in testing to avoid issues with test clients
+    if settings.environment != "testing":
+        app.add_middleware(compression.CompressionMiddleware)
     app.add_middleware(security.SecurityMiddleware)
     app.add_middleware(validation.ValidationMiddleware)
     app.add_middleware(

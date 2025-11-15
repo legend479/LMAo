@@ -295,43 +295,70 @@ class RAGPipeline:
                 search_type=search_type,
             )
 
+            # Handle both SearchResponse objects and dict responses
+            if isinstance(search_response, dict):
+                # If search_engine returned a dict (shouldn't happen but handle gracefully)
+                results = search_response.get("results", [])
+                total_hits = search_response.get("total_hits", len(results))
+                max_score = search_response.get("max_score", 0.0)
+                took_ms = search_response.get("took_ms", 0)
+                response_search_type = search_response.get("search_type", search_type)
+            else:
+                # Normal case - SearchResponse object
+                results = search_response.results
+                total_hits = search_response.total_hits
+                max_score = search_response.max_score
+                took_ms = search_response.took_ms
+                response_search_type = search_response.search_type
+
             logger.info(
                 "Search completed",
                 query=query[:100],
-                results_count=len(search_response.results),
-                search_time=search_response.took_ms,
+                results_count=len(results),
+                search_time=took_ms,
             )
+
+            # Convert results to dict format
+            formatted_results = []
+            for result in results:
+                # Handle both SearchResult objects and dicts
+                if hasattr(result, "chunk_id"):
+                    formatted_results.append(
+                        {
+                            "chunk_id": result.chunk_id,
+                            "content": result.content,
+                            "score": result.score,
+                            "document_id": result.document_id,
+                            "chunk_type": result.chunk_type,
+                            "parent_chunk_id": result.parent_chunk_id,
+                            "highlights": result.highlights,
+                            "metadata": {
+                                "document_title": result.metadata.get("document_title"),
+                                "document_author": result.metadata.get(
+                                    "document_author"
+                                ),
+                                "document_category": result.metadata.get(
+                                    "document_category"
+                                ),
+                                "size_category": result.metadata.get("size_category"),
+                                "word_count": result.metadata.get("word_count"),
+                                "text_type": result.metadata.get("text_type"),
+                                "code_type": result.metadata.get("code_type"),
+                            },
+                        }
+                    )
+                else:
+                    # Result is already a dict
+                    formatted_results.append(result)
 
             return {
                 "query": query,
-                "results": [
-                    {
-                        "chunk_id": result.chunk_id,
-                        "content": result.content,
-                        "score": result.score,
-                        "document_id": result.document_id,
-                        "chunk_type": result.chunk_type,
-                        "parent_chunk_id": result.parent_chunk_id,
-                        "highlights": result.highlights,
-                        "metadata": {
-                            "document_title": result.metadata.get("document_title"),
-                            "document_author": result.metadata.get("document_author"),
-                            "document_category": result.metadata.get(
-                                "document_category"
-                            ),
-                            "size_category": result.metadata.get("size_category"),
-                            "word_count": result.metadata.get("word_count"),
-                            "text_type": result.metadata.get("text_type"),
-                            "code_type": result.metadata.get("code_type"),
-                        },
-                    }
-                    for result in search_response.results
-                ],
-                "total_results": search_response.total_hits,
-                "max_score": search_response.max_score,
-                "processing_time": search_response.took_ms
-                / 1000.0,  # Convert to seconds
-                "search_type": search_response.search_type,
+                "results": formatted_results,
+                "total_results": total_hits,
+                "max_score": max_score,
+                "processing_time": took_ms / 1000.0,  # Convert to seconds
+                "search_type": response_search_type,
+                "search_time": took_ms / 1000.0,  # Add search_time for compatibility
             }
 
         except Exception as e:
@@ -341,6 +368,7 @@ class RAGPipeline:
                 "results": [],
                 "total_results": 0,
                 "processing_time": 0.0,
+                "search_time": 0.0,
                 "error": str(e),
             }
 
