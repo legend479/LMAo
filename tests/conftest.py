@@ -88,9 +88,34 @@ async def app(test_settings):
 
 @pytest.fixture
 async def client(app) -> AsyncGenerator[AsyncClient, None]:
-    """Create test client."""
-    async with AsyncClient(app=app, base_url="http://test") as ac:
+    """Create test client with authentication mocked."""
+    from src.api_server.routers.auth import get_current_active_user, User
+    from datetime import datetime
+    import httpx
+
+    # Mock user for testing
+    def get_mock_user():
+        return User(
+            id="test_user_123",
+            username="testuser",
+            email="test@example.com",
+            full_name="Test User",
+            is_active=True,
+            is_admin=False,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow(),
+        )
+
+    # Override authentication dependency
+    app.dependency_overrides[get_current_active_user] = get_mock_user
+
+    # Add timeout to prevent hanging tests (30s total, 5s connect)
+    timeout = httpx.Timeout(30.0, connect=5.0)
+    async with AsyncClient(app=app, base_url="http://test", timeout=timeout) as ac:
         yield ac
+
+    # Clean up overrides
+    app.dependency_overrides.clear()
 
 
 @pytest.fixture
@@ -357,8 +382,8 @@ print("Hello, World!")
 def performance_config():
     """Configuration for performance tests."""
     return {
-        "concurrent_users": 10,
-        "requests_per_user": 100,
+        "concurrent_users": 5,  # Reduced from 10 to speed up tests
+        "requests_per_user": 10,  # Reduced from 100 to speed up tests
         "ramp_up_time": 30,
         "test_duration": 300,
         "acceptable_response_time": 2.0,

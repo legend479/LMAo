@@ -362,6 +362,119 @@ async def delete_document(
         raise HTTPException(status_code=500, detail="Failed to delete document")
 
 
+class SearchRequest(BaseModel):
+    query: str = Field(..., description="Search query string")
+    max_results: int = Field(
+        default=10, ge=1, le=100, description="Maximum number of results to return"
+    )
+    filters: Optional[Dict[str, Any]] = Field(
+        default=None, description="Optional filters for search"
+    )
+    search_type: str = Field(
+        default="hybrid", description="Search type: semantic, keyword, or hybrid"
+    )
+
+
+class SearchResult(BaseModel):
+    content: str = Field(..., description="Content of the search result")
+    score: float = Field(..., description="Relevance score")
+    chunk_id: str = Field(..., description="Unique identifier for the chunk")
+    document_id: str = Field(..., description="Document ID this chunk belongs to")
+    metadata: Optional[Dict[str, Any]] = Field(
+        default=None, description="Additional metadata"
+    )
+
+
+class SearchResponse(BaseModel):
+    query: str = Field(..., description="Original search query")
+    results: List[SearchResult] = Field(..., description="List of search results")
+    total_results: int = Field(..., description="Total number of results found")
+    processing_time: float = Field(
+        ..., description="Time taken to process the search in seconds"
+    )
+
+
+@router.post("/search", response_model=SearchResponse)
+async def search_documents(
+    search_request: SearchRequest,
+    current_user: User = Depends(get_current_active_user),
+):
+    """
+    Search through indexed documents using RAG pipeline
+
+    Supports semantic search, keyword search, and hybrid search modes.
+    Results are ranked by relevance score.
+    """
+
+    try:
+        from src.shared.services import get_rag_client
+        import time
+
+        start_time = time.time()
+
+        logger.info(
+            "Document search initiated",
+            user_id=current_user.id,
+            query=search_request.query[:100],  # Log first 100 chars
+            max_results=search_request.max_results,
+            search_type=search_request.search_type,
+        )
+
+        # Get RAG client
+        rag_client = await get_rag_client()
+
+        # Add user_id to filters to ensure users only search their own documents
+        filters = search_request.filters or {}
+        filters["user_id"] = current_user.id
+
+        # Perform search through RAG pipeline
+        search_result = await rag_client.search(
+            query=search_request.query,
+            filters=filters,
+            max_results=search_request.max_results,
+            search_type=search_request.search_type,
+        )
+
+        processing_time = time.time() - start_time
+
+        # Transform RAG results to API response format
+        results = []
+        for item in search_result.get("results", []):
+            results.append(
+                SearchResult(
+                    content=item.get("content", ""),
+                    score=item.get("score", 0.0),
+                    chunk_id=item.get("chunk_id", ""),
+                    document_id=item.get("document_id", ""),
+                    metadata=item.get("metadata"),
+                )
+            )
+
+        logger.info(
+            "Document search completed",
+            user_id=current_user.id,
+            results_count=len(results),
+            processing_time=processing_time,
+        )
+
+        return SearchResponse(
+            query=search_request.query,
+            results=results,
+            total_results=len(results),
+            processing_time=processing_time,
+        )
+
+    except Exception as e:
+        logger.error(
+            "Document search failed",
+            user_id=current_user.id,
+            query=search_request.query[:100],
+            error=str(e),
+            error_type=type(e).__name__,
+        )
+        raise HTTPException(status_code=500, detail=f"Search failed: {str(e)}")
+
+
 @router.get("/download/{document_id}")
 async def download_document(document_id: str):
     """Download a generated document"""

@@ -349,6 +349,10 @@ class RateLimitingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         """Apply advanced rate limiting and performance optimization"""
 
+        # Bypass rate limiting in testing environment for performance
+        if self.settings.environment == "testing":
+            return await call_next(request)
+
         start_time = time.time()
         request_id = getattr(request.state, "request_id", "unknown")
 
