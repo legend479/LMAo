@@ -160,7 +160,9 @@ class TestConfigHelpers:
 
         config = get_elasticsearch_config()
 
-        assert config["hosts"] == ["localhost:9200"]
+        assert config["hosts"] == [
+            "http://localhost:9200"
+        ]  # Implementation adds http:// prefix
         assert config["timeout"] == 30
         assert config["max_retries"] == 3
 

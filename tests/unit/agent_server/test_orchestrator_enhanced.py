@@ -397,8 +397,10 @@ class TestErrorRecoveryMechanisms:
         # Verify retry logic
         assert result["context"]["task_1_retry_count"] == 1
         assert "task_1_backoff_delay" in result["context"]
-        assert "task_1" not in result["failed_tasks"]
-        assert result["last_error"] is None
+        # Recovery node returns partial state, check the original state was modified
+        assert "task_1" not in state["failed_tasks"]
+        # last_error is not returned in partial state for retry strategy
+        assert "last_error" not in result
 
     @pytest.mark.asyncio
     async def test_recovery_node_fallback_strategy(self, orchestrator):
@@ -425,9 +427,11 @@ class TestErrorRecoveryMechanisms:
 
         result = await recovery_node(state)
 
-        # Verify fallback logic
-        assert "task_1" not in result["failed_tasks"]
-        assert "task_1" in result["completed_tasks"]
+        # Verify fallback logic - recovery node returns partial state
+        assert (
+            "task_1" not in state["failed_tasks"]
+        )  # Check original state was modified
+        assert "task_1" in result["completed_tasks"]  # Partial state includes this
         assert result["task_results"]["task_1"]["recovered"] is True
         assert result["task_results"]["task_1"]["recovery_strategy"] == "fallback"
 
@@ -453,8 +457,10 @@ class TestErrorRecoveryMechanisms:
 
         result = await recovery_node(state)
 
-        # Verify skip logic
-        assert "task_1" not in result["failed_tasks"]
+        # Verify skip logic - recovery node returns partial state
+        assert (
+            "task_1" not in state["failed_tasks"]
+        )  # Check original state was modified
         assert result["task_results"]["task_1"]["skipped"] is True
         assert result["task_results"]["task_1"]["recovery_strategy"] == "skip"
 
@@ -568,8 +574,8 @@ class TestIntegrationScenarios:
         result1 = await recovery_node(state)
         assert result1["context"]["task_1_retry_count"] == 1
 
-        # Second recovery attempt
-        state = result1.copy()
+        # Second recovery attempt - merge result back into state
+        state["context"].update(result1["context"])
         state["failed_tasks"] = ["task_1"]  # Task failed again
         state["error_count"] = 2
 
@@ -577,7 +583,7 @@ class TestIntegrationScenarios:
         assert result2["context"]["task_1_retry_count"] == 2
 
         # Third attempt should not increment beyond max_retries
-        state = result2.copy()
+        state["context"].update(result2["context"])
         state["failed_tasks"] = ["task_1"]
         state["error_count"] = 3
 

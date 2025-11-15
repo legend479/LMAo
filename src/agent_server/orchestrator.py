@@ -932,7 +932,10 @@ class LangGraphOrchestrator:
                             workflow_state.failed_tasks.remove(current_task)
 
                         # Add to completed tasks with fallback result
-                        if current_task not in workflow_state.completed_tasks:
+                        task_was_completed = (
+                            current_task in workflow_state.completed_tasks
+                        )
+                        if not task_was_completed:
                             workflow_state.completed_tasks.append(current_task)
 
                         workflow_state.task_results[current_task] = {
@@ -941,6 +944,11 @@ class LangGraphOrchestrator:
                             "result": fallback_result,
                             "original_error": workflow_state.last_error,
                         }
+
+                        # Store whether we added the task for later use
+                        workflow_state.context["_fallback_added_to_completed"] = (
+                            not task_was_completed
+                        )
 
                         logger.info(
                             "Task recovered using fallback strategy",
@@ -989,11 +997,11 @@ class LangGraphOrchestrator:
                     # These strategies modify completed_tasks and task_results
                     current_task = workflow_state.current_task
                     if current_task:
-                        if (
-                            strategy == "fallback"
-                            and current_task not in workflow_state.completed_tasks
+                        # For fallback, include completed_tasks if we added the task
+                        if strategy == "fallback" and workflow_state.context.get(
+                            "_fallback_added_to_completed", False
                         ):
-                            result["completed_tasks"] = [current_task]
+                            result["completed_tasks"] = workflow_state.completed_tasks
                         result["task_results"] = {
                             current_task: workflow_state.task_results.get(
                                 current_task, {}
