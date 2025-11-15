@@ -40,6 +40,9 @@ class AgentServer:
         await self.memory_manager.initialize()
         await self.tool_registry.initialize()
 
+        # Connect orchestrator to tool registry
+        self.orchestrator.set_tool_registry(self.tool_registry)
+
         # Auto-register default tools
         try:
             from .tools.auto_register import register_default_tools

@@ -98,8 +98,12 @@ class ToolRecommendation:
 class ToolDatabase:
     """SQLite database for tool registry persistence"""
 
-    def __init__(self, db_path: str = "tool_registry.db"):
+    def __init__(self, db_path: str = "data/tools.db"):
         self.db_path = db_path
+        # Ensure data directory exists
+        import os
+
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         self._init_database()
 
     def _init_database(self):
@@ -490,7 +494,7 @@ class ToolDatabase:
 class ToolRegistryManager:
     """Enhanced tool registry with database persistence and lifecycle management"""
 
-    def __init__(self, db_path: str = "tool_registry.db"):
+    def __init__(self, db_path: str = "data/tools.db"):
         self.db = ToolDatabase(db_path)
         self.active_tools: Dict[str, BaseTool] = {}
         self.tool_cache: Dict[str, ToolMetadata] = {}

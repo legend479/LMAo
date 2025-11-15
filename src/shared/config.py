@@ -71,7 +71,7 @@ class Settings(BaseSettings):
     log_format: str = Field(default="text", description="Log format (json, text)")
 
     # File Storage
-    upload_dir: str = Field(default="./uploads", description="Upload directory")
+    upload_dir: str = Field(default="./data/uploads", description="Upload directory")
     max_file_size: int = Field(
         default=10 * 1024 * 1024, description="Maximum file size in bytes (10MB)"
     )

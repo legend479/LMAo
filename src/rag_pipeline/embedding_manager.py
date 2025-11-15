@@ -26,7 +26,7 @@ class EmbeddingConfig:
     general_model_name: str = "all-mpnet-base-v2"
     domain_model_name: str = "microsoft/graphcodebert-base"
     cache_embeddings: bool = True
-    cache_dir: str = ".embedding_cache"
+    cache_dir: str = "data/embeddings"
     batch_size: int = 32
     max_sequence_length: int = 512
     device: str = "auto"  # auto, cpu, cuda

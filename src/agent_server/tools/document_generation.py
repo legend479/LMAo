@@ -640,11 +640,14 @@ class DocumentGenerationTool(BaseTool):
         self.template_manager = TemplateManager()
         self.content_analyzer = ContentAnalyzer()
         self.validator = DocumentValidator()
+        default_output_dir = "data/generated_documents"
         self.output_directory = (
-            config.get("output_directory", tempfile.gettempdir())
+            config.get("output_directory", default_output_dir)
             if config
-            else tempfile.gettempdir()
+            else default_output_dir
         )
+        # Ensure output directory exists
+        os.makedirs(self.output_directory, exist_ok=True)
 
         # Ensure output directory exists
         os.makedirs(self.output_directory, exist_ok=True)

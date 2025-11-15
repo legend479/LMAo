@@ -261,14 +261,127 @@ class ContextPruner:
         common_task_words = set(message_task_words).intersection(set(query_task_words))
         return len(common_task_words) / max(len(query_task_words), 1)
 
+    async def _generate_embedding(self, content: str) -> Optional[List[float]]:
+        """Generate embedding vector for content"""
+
+        try:
+            # Check if we have embedding capability
+            if (
+                not hasattr(self, "_embedding_manager")
+                or self._embedding_manager is None
+            ):
+                # Try to initialize embedding manager lazily
+                try:
+                    from src.rag_pipeline.embedding_manager import (
+                        EmbeddingManager,
+                        EmbeddingConfig,
+                    )
+
+                    self._embedding_manager = EmbeddingManager(EmbeddingConfig())
+                    await self._embedding_manager.initialize()
+                    logger.info("Embedding manager initialized for message embeddings")
+                except Exception as e:
+                    logger.debug(
+                        f"Could not initialize embedding manager: {e}. Embeddings disabled."
+                    )
+                    self._embedding_manager = None
+                    return None
+
+            if self._embedding_manager:
+                # Generate embedding
+                embedding_result = await self._embedding_manager.generate_embeddings(
+                    content
+                )
+                return embedding_result.general_embedding
+            else:
+                return None
+
+        except Exception as e:
+            logger.debug(f"Error generating embedding: {e}")
+            return None
+
     async def _calculate_semantic_similarity(
         self, message: Message, current_query: str
     ) -> float:
         """Calculate semantic similarity using embeddings"""
 
-        # TODO: Implement actual semantic similarity calculation
-        # This would require embedding the current query and comparing with message embedding
-        return 0.5  # Placeholder
+        try:
+            # Check if we have embedding capability
+            if (
+                not hasattr(self, "_embedding_manager")
+                or self._embedding_manager is None
+            ):
+                # Try to initialize embedding manager lazily
+                try:
+                    from src.rag_pipeline.embedding_manager import (
+                        EmbeddingManager,
+                        EmbeddingConfig,
+                    )
+
+                    self._embedding_manager = EmbeddingManager(EmbeddingConfig())
+                    await self._embedding_manager.initialize()
+                    logger.info("Embedding manager initialized for semantic similarity")
+                except Exception as e:
+                    logger.warning(
+                        f"Could not initialize embedding manager: {e}. Using keyword-based similarity."
+                    )
+                    self._embedding_manager = None
+
+            if self._embedding_manager:
+                # Generate embeddings for current query
+                query_embedding_result = (
+                    await self._embedding_manager.generate_embeddings(current_query)
+                )
+                query_embedding = query_embedding_result.general_embedding
+
+                # Get or generate embedding for message
+                if message.embedding:
+                    message_embedding = message.embedding
+                else:
+                    # Generate embedding for message content
+                    message_embedding_result = (
+                        await self._embedding_manager.generate_embeddings(
+                            message.content
+                        )
+                    )
+                    message_embedding = message_embedding_result.general_embedding
+
+                # Calculate cosine similarity
+                import numpy as np
+
+                query_vec = np.array(query_embedding)
+                message_vec = np.array(message_embedding)
+
+                # Cosine similarity
+                dot_product = np.dot(query_vec, message_vec)
+                norm_product = np.linalg.norm(query_vec) * np.linalg.norm(message_vec)
+
+                if norm_product == 0:
+                    return 0.0
+
+                similarity = dot_product / norm_product
+                # Normalize to 0-1 range (cosine similarity is -1 to 1)
+                normalized_similarity = (similarity + 1) / 2
+
+                return float(normalized_similarity)
+            else:
+                # Fallback: simple keyword-based similarity
+                query_words = set(current_query.lower().split())
+                message_words = set(message.content.lower().split())
+
+                if not query_words or not message_words:
+                    return 0.0
+
+                # Jaccard similarity
+                intersection = len(query_words & message_words)
+                union = len(query_words | message_words)
+
+                return intersection / union if union > 0 else 0.0
+
+        except Exception as e:
+            logger.error(f"Error calculating semantic similarity: {e}")
+            # Fallback to neutral score
+            return 0.5
 
     async def _maintain_conversation_flow(
         self, scored_messages: List[Tuple[Message, float]], target_size: int
@@ -767,8 +880,14 @@ class MemoryManager:
         if execution_metadata:
             metadata.update(execution_metadata)
 
-        # TODO: Generate embedding for semantic similarity
-        # embedding = await self._generate_embedding(content)
+        # Generate embedding for semantic similarity
+        try:
+            embedding = await self._generate_embedding(content)
+        except Exception as e:
+            logger.warning(
+                f"Failed to generate embedding for message: {e}. Continuing without embedding."
+            )
+            embedding = None
 
         return Message(
             content=content,
@@ -777,7 +896,7 @@ class MemoryManager:
             metadata=metadata,
             relevance_score=relevance_score,
             context_tags=context_tags,
-            embedding=None,  # TODO: Add embedding generation
+            embedding=embedding,
         )
 
     async def _extract_context_tags(self, content: str) -> List[str]:
@@ -907,9 +1026,45 @@ class MemoryManager:
         if not summaries:
             return None
 
-        # For now, return the most recent summary
-        # TODO: Implement relevance-based selection
-        return summaries[-1]
+        # If only one summary, return it
+        if len(summaries) == 1:
+            return summaries[0]
+
+        # Implement relevance-based selection
+        # Score summaries based on:
+        # 1. Recency (more recent = higher score)
+        # 2. Topic overlap with current context
+        # 3. Key topics coverage
+
+        # Extract topics from current context
+        context_topics = set()
+        for msg in context_messages[-5:]:  # Last 5 messages
+            context_topics.update(msg.context_tags)
+
+        best_summary = None
+        best_score = -1
+
+        for i, summary in enumerate(summaries):
+            # Recency score (0-1, more recent = higher)
+            recency_score = (i + 1) / len(summaries)
+
+            # Topic overlap score
+            summary_topics = set(summary.key_topics)
+            if context_topics and summary_topics:
+                topic_overlap = len(context_topics & summary_topics) / len(
+                    context_topics | summary_topics
+                )
+            else:
+                topic_overlap = 0.0
+
+            # Combined score (weighted)
+            combined_score = (0.6 * recency_score) + (0.4 * topic_overlap)
+
+            if combined_score > best_score:
+                best_score = combined_score
+                best_summary = summary
+
+        return best_summary if best_summary else summaries[-1]
 
     async def _extract_user_context(
         self, messages: List[Message], user_profile: Optional[UserProfile]
@@ -1047,6 +1202,45 @@ class MemoryManager:
 
         return domain_context
 
+    async def _generate_embedding(self, content: str) -> Optional[List[float]]:
+        """Generate embedding vector for content"""
+
+        try:
+            # Check if we have embedding capability
+            if (
+                not hasattr(self, "_embedding_manager")
+                or self._embedding_manager is None
+            ):
+                # Try to initialize embedding manager lazily
+                try:
+                    from src.rag_pipeline.embedding_manager import (
+                        EmbeddingManager,
+                        EmbeddingConfig,
+                    )
+
+                    self._embedding_manager = EmbeddingManager(EmbeddingConfig())
+                    await self._embedding_manager.initialize()
+                    logger.info("Embedding manager initialized for message embeddings")
+                except Exception as e:
+                    logger.debug(
+                        f"Could not initialize embedding manager: {e}. Embeddings disabled."
+                    )
+                    self._embedding_manager = None
+                    return None
+
+            if self._embedding_manager:
+                # Generate embedding
+                embedding_result = await self._embedding_manager.generate_embeddings(
+                    content
+                )
+                return embedding_result.general_embedding
+            else:
+                return None
+
+        except Exception as e:
+            logger.debug(f"Error generating embedding: {e}")
+            return None
+
     async def _persist_to_redis(
         self, session_id: str, user_msg: Message, agent_msg: Message
     ):
@@ -1099,8 +1293,66 @@ class MemoryManager:
             return
 
         try:
-            # TODO: Implement loading from Redis
             logger.info("Loading existing conversations from Redis")
+
+            # Get all session keys
+            session_keys = await self.redis_client.keys("memory:session:*:messages")
+
+            loaded_sessions = 0
+            loaded_messages = 0
+
+            for key in session_keys:
+                try:
+                    # Extract session_id from key
+                    session_id = key.split(":")[2]
+
+                    # Load messages for this session
+                    message_data_list = await self.redis_client.lrange(key, 0, -1)
+
+                    if not message_data_list:
+                        continue
+
+                    # Parse and reconstruct messages
+                    messages = []
+                    for msg_json in message_data_list:
+                        import json
+
+                        msg_data = json.loads(msg_json)
+
+                        # Reconstruct Message object
+                        message = Message(
+                            content=msg_data["content"],
+                            role=MessageRole(msg_data["role"]),
+                            timestamp=datetime.fromisoformat(msg_data["timestamp"]),
+                            metadata=msg_data.get("metadata", {}),
+                            relevance_score=msg_data.get("relevance_score", 0.5),
+                            context_tags=msg_data.get("context_tags", []),
+                            embedding=msg_data.get("embedding"),
+                        )
+                        messages.append(message)
+
+                    # Store in memory
+                    self.conversations[session_id] = messages
+                    loaded_messages += len(messages)
+                    loaded_sessions += 1
+
+                    # Load session metadata
+                    metadata_key = f"memory:session:{session_id}:metadata"
+                    metadata_json = await self.redis_client.get(metadata_key)
+                    if metadata_json:
+                        import json
+
+                        self.session_metadata[session_id] = json.loads(metadata_json)
+
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to load session {session_id} from Redis: {e}"
+                    )
+                    continue
+
+            logger.info(
+                f"Loaded {loaded_messages} messages from {loaded_sessions} sessions from Redis"
+            )
 
         except Exception as e:
             logger.error("Failed to load from Redis", error=str(e))
@@ -1315,9 +1567,81 @@ class MemoryManager:
         # Persist final state to Redis
         if self.redis_client:
             try:
-                # TODO: Implement final persistence
+                # Persist all active conversations
+                logger.info("Persisting final state to Redis")
+
+                persist_count = 0
+                for session_id, messages in self.conversations.items():
+                    try:
+                        # Persist messages
+                        key = f"memory:session:{session_id}:messages"
+                        import json
+
+                        for msg in messages:
+                            msg_data = {
+                                "content": msg.content,
+                                "role": msg.role.value,
+                                "timestamp": msg.timestamp.isoformat(),
+                                "metadata": msg.metadata,
+                                "relevance_score": msg.relevance_score,
+                                "context_tags": msg.context_tags,
+                            }
+
+                            # Convert embedding to list if it exists (numpy arrays aren't JSON serializable)
+                            if msg.embedding is not None:
+                                try:
+                                    # Convert numpy array to list
+                                    if hasattr(msg.embedding, "tolist"):
+                                        msg_data["embedding"] = msg.embedding.tolist()
+                                    elif isinstance(msg.embedding, list):
+                                        msg_data["embedding"] = msg.embedding
+                                    else:
+                                        # Skip embedding if it's not a recognized type
+                                        logger.debug(
+                                            f"Skipping embedding of type {type(msg.embedding)}"
+                                        )
+                                except Exception as e:
+                                    logger.debug(f"Failed to serialize embedding: {e}")
+
+                            await self.redis_client.rpush(key, json.dumps(msg_data))
+
+                        # Set expiration (30 days)
+                        await self.redis_client.expire(key, 2592000)
+
+                        # Persist session metadata
+                        if session_id in self.session_metadata:
+                            metadata_key = f"memory:session:{session_id}:metadata"
+
+                            # Convert datetime objects to ISO format strings
+                            metadata = self.session_metadata[session_id].copy()
+                            for key, value in metadata.items():
+                                if isinstance(value, datetime):
+                                    metadata[key] = value.isoformat()
+
+                            await self.redis_client.setex(
+                                metadata_key,
+                                2592000,
+                                json.dumps(metadata),
+                            )
+
+                        persist_count += 1
+
+                    except Exception as e:
+                        logger.warning(f"Failed to persist session {session_id}: {e}")
+
+                logger.info(f"Persisted {persist_count} sessions to Redis")
+
+                # Close Redis connection
                 await self.redis_client.close()
+
             except Exception as e:
-                logger.error("Error closing Redis connection", error=str(e))
+                logger.error("Error during final persistence", error=str(e))
+
+        # Shutdown embedding manager if initialized
+        if hasattr(self, "_embedding_manager") and self._embedding_manager:
+            try:
+                await self._embedding_manager.shutdown()
+            except Exception as e:
+                logger.warning(f"Error shutting down embedding manager: {e}")
 
         logger.info("Enhanced Memory Manager shutdown complete")

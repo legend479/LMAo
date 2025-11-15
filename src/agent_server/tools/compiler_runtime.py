@@ -283,7 +283,10 @@ class SandboxManager:
     """Manages sandboxed execution environments"""
 
     def __init__(self, base_temp_dir: Optional[str] = None):
-        self.base_temp_dir = base_temp_dir or tempfile.gettempdir()
+        default_temp_dir = "data/temp"
+        self.base_temp_dir = base_temp_dir or default_temp_dir
+        # Ensure temp directory exists
+        os.makedirs(self.base_temp_dir, exist_ok=True)
         self.active_sandboxes: Dict[str, str] = {}
 
     @contextmanager

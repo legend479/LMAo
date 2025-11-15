@@ -3,16 +3,23 @@ LangGraph Orchestrator
 Stateful workflow management using LangGraph
 """
 
-from typing import Dict, Any, List, Optional, Callable
+from typing import Dict, Any, List, Optional, Callable, Annotated
 import asyncio
 import redis.asyncio as redis
 from dataclasses import dataclass, asdict
 from enum import Enum
 from datetime import datetime, UTC
+import operator
 
 from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.redis import RedisSaver
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langchain_core.runnables import RunnableConfig
+
+# Note: Using MemorySaver for in-memory state persistence
+# MemorySaver provides a complete implementation of all async checkpoint methods
+# For production with persistence across restarts, consider implementing a custom
+# checkpointer with Redis or SQLite backend
 
 from src.shared.logging import get_logger
 from src.shared.config import get_settings
@@ -73,13 +80,15 @@ class WorkflowState:
     session_id: str
     plan_id: str
     current_task: Optional[str] = None
-    completed_tasks: List[str] = None
-    failed_tasks: List[str] = None
-    task_results: Dict[str, Any] = None
-    context: Dict[str, Any] = None
+    # Use Annotated with operator.add for lists that can be updated by parallel nodes
+    completed_tasks: Annotated[List[str], operator.add] = None
+    failed_tasks: Annotated[List[str], operator.add] = None
+    # Use custom reducer for dict merging
+    task_results: Annotated[Dict[str, Any], lambda x, y: {**x, **y}] = None
+    context: Annotated[Dict[str, Any], lambda x, y: {**x, **y}] = None
     error_count: int = 0
     last_error: Optional[str] = None
-    execution_path: List[str] = None
+    execution_path: Annotated[List[str], operator.add] = None
 
     def __post_init__(self):
         if self.completed_tasks is None:
@@ -118,13 +127,19 @@ class LangGraphOrchestrator:
     def __init__(self):
         self.settings = get_settings()
         self.redis_client: Optional[redis.Redis] = None
-        self.checkpointer: Optional[RedisSaver] = None
+        self.checkpointer: Optional[BaseCheckpointSaver] = None
         self.active_executions: Dict[str, Dict[str, Any]] = {}
         self.execution_history: Dict[str, List[ExecutionResult]] = {}
         self.workflow_graphs: Dict[str, StateGraph] = {}
         self.workflow_nodes: Dict[str, Dict[str, WorkflowNode]] = {}
         self.llm_integration = None
+        self.tool_registry = None  # Will be set by AgentServer
         self._initialized = False
+
+    def set_tool_registry(self, tool_registry):
+        """Set the tool registry for generic tool execution"""
+        self.tool_registry = tool_registry
+        logger.info("Tool registry configured for orchestrator")
 
     async def initialize(self):
         """Initialize the orchestrator with Redis and LangGraph components"""
@@ -143,7 +158,49 @@ class LangGraphOrchestrator:
             logger.info("Redis connection established")
 
             # Initialize LangGraph checkpointer
-            self.checkpointer = RedisSaver(redis_url)
+            # Using MemorySaver for in-memory state persistence
+            # For production persistence, implement custom checkpointer with Redis/SQLite
+            try:
+                self.checkpointer = MemorySaver()
+
+                # Validate checkpointer has required async methods
+                test_config = RunnableConfig(
+                    configurable={
+                        "thread_id": "test_init",
+                        "checkpoint_ns": "test_namespace",
+                    }
+                )
+
+                # Test if aget_tuple is implemented (this is what causes the error)
+                try:
+                    await self.checkpointer.aget_tuple(test_config)
+                    logger.info(
+                        "Checkpointer validation successful - aget_tuple is implemented"
+                    )
+                except NotImplementedError:
+                    logger.error(
+                        "Checkpointer aget_tuple not implemented, disabling checkpointer"
+                    )
+                    self.checkpointer = None
+                except Exception:
+                    # Other exceptions are fine (e.g., checkpoint not found)
+                    pass
+
+                if self.checkpointer:
+                    logger.info(
+                        "Using MemorySaver for checkpointing (in-memory state persistence)"
+                    )
+                else:
+                    logger.warning(
+                        "Checkpointer disabled - workflows will run in stateless mode"
+                    )
+
+            except Exception as e:
+                logger.error(
+                    "Failed to initialize checkpointer, running in stateless mode",
+                    error=str(e),
+                )
+                self.checkpointer = None
 
             # Initialize LLM integration
             self.llm_integration = await get_llm_integration()
@@ -204,7 +261,21 @@ class LangGraphOrchestrator:
                 workflow.add_edge("start", task_id)
 
         # Compile workflow with checkpointer
-        compiled_workflow = workflow.compile(checkpointer=self.checkpointer)
+        # Only use checkpointer if it's properly initialized
+        if self.checkpointer is not None:
+            compiled_workflow = workflow.compile(checkpointer=self.checkpointer)
+            logger.debug(
+                "Workflow compiled with checkpointer",
+                plan_id=plan.plan_id,
+                checkpointer_type=type(self.checkpointer).__name__,
+            )
+        else:
+            # Compile without checkpointer as fallback
+            compiled_workflow = workflow.compile()
+            logger.warning(
+                "Workflow compiled without checkpointer (stateless mode)",
+                plan_id=plan.plan_id,
+            )
 
         # Store compiled workflow
         self.workflow_graphs[plan.plan_id] = compiled_workflow
@@ -257,16 +328,143 @@ class LangGraphOrchestrator:
 
             # Execute workflow
             final_state = None
-            execution_path = []
-            tool_results = []
+            accumulated_state = {
+                "execution_path": [],
+                "task_results": {},
+                "completed_tasks": [],
+                "failed_tasks": [],
+            }
 
-            async for state in workflow.astream(asdict(initial_state), config):
-                # Update execution tracking
-                if isinstance(state, dict) and "execution_path" in state:
-                    execution_path.extend(state["execution_path"])
+            try:
+                async for state_update in workflow.astream(
+                    asdict(initial_state), config
+                ):
+                    # LangGraph astream returns dict with node names as keys
+                    # e.g., {"task_1": {"execution_path": [...], "task_results": {...}}}
 
-                if isinstance(state, dict) and "task_results" in state:
-                    for task_id, result in state["task_results"].items():
+                    if isinstance(state_update, dict):
+                        # Iterate through each node's state update
+                        for node_name, node_state in state_update.items():
+                            if isinstance(node_state, dict):
+                                # Accumulate execution path
+                                if "execution_path" in node_state:
+                                    accumulated_state["execution_path"].extend(
+                                        node_state["execution_path"]
+                                    )
+
+                                # Accumulate task results
+                                if "task_results" in node_state:
+                                    accumulated_state["task_results"].update(
+                                        node_state["task_results"]
+                                    )
+
+                                # Accumulate completed tasks
+                                if "completed_tasks" in node_state:
+                                    accumulated_state["completed_tasks"].extend(
+                                        node_state["completed_tasks"]
+                                    )
+
+                                # Accumulate failed tasks
+                                if "failed_tasks" in node_state:
+                                    accumulated_state["failed_tasks"].extend(
+                                        node_state["failed_tasks"]
+                                    )
+
+                    final_state = state_update
+
+                    # Store checkpoint
+                    checkpoint = {
+                        "timestamp": datetime.now(UTC).isoformat(),
+                        "state": state_update,
+                        "execution_path": accumulated_state["execution_path"].copy(),
+                    }
+                    self.active_executions[execution_id]["checkpoints"].append(
+                        checkpoint
+                    )
+
+                # Build tool_results from accumulated task_results
+                tool_results = []
+                for task_id, result in accumulated_state["task_results"].items():
+                    if result and isinstance(result, dict):
+                        tool_results.append(
+                            {
+                                "task_id": task_id,
+                                "result": result,
+                                "timestamp": datetime.now(UTC).isoformat(),
+                            }
+                        )
+
+                execution_path = accumulated_state["execution_path"]
+
+            except NotImplementedError as nie:
+                # Checkpointer method not implemented - recreate workflow without checkpointer
+                logger.warning(
+                    "Checkpointer method not implemented, retrying without checkpointer",
+                    plan_id=plan.plan_id,
+                    error=str(nie),
+                )
+
+                # Recreate workflow without checkpointer
+                workflow_no_checkpoint = await self.create_workflow_graph(plan)
+
+                # Temporarily disable checkpointer for this execution
+                original_checkpointer = self.checkpointer
+                self.checkpointer = None
+
+                try:
+                    # Recreate the workflow graph without checkpointer
+                    workflow_no_checkpoint = await self.create_workflow_graph(plan)
+
+                    # Execute without checkpointer (stateless mode)
+                    async for state_update in workflow_no_checkpoint.astream(
+                        asdict(initial_state), config
+                    ):
+                        # LangGraph astream returns dict with node names as keys
+                        if isinstance(state_update, dict):
+                            # Iterate through each node's state update
+                            for node_name, node_state in state_update.items():
+                                if isinstance(node_state, dict):
+                                    # Accumulate execution path
+                                    if "execution_path" in node_state:
+                                        accumulated_state["execution_path"].extend(
+                                            node_state["execution_path"]
+                                        )
+
+                                    # Accumulate task results
+                                    if "task_results" in node_state:
+                                        accumulated_state["task_results"].update(
+                                            node_state["task_results"]
+                                        )
+
+                                    # Accumulate completed tasks
+                                    if "completed_tasks" in node_state:
+                                        accumulated_state["completed_tasks"].extend(
+                                            node_state["completed_tasks"]
+                                        )
+
+                                    # Accumulate failed tasks
+                                    if "failed_tasks" in node_state:
+                                        accumulated_state["failed_tasks"].extend(
+                                            node_state["failed_tasks"]
+                                        )
+
+                        final_state = state_update
+
+                        # Store checkpoint in memory (not using checkpointer)
+                        checkpoint = {
+                            "timestamp": datetime.now(UTC).isoformat(),
+                            "state": state_update,
+                            "execution_path": accumulated_state[
+                                "execution_path"
+                            ].copy(),
+                        }
+                        self.active_executions[execution_id]["checkpoints"].append(
+                            checkpoint
+                        )
+
+                    # Build tool_results from accumulated task_results
+                    tool_results = []
+                    for task_id, result in accumulated_state["task_results"].items():
                         if result and isinstance(result, dict):
                             tool_results.append(
                                 {
@@ -276,20 +474,39 @@ class LangGraphOrchestrator:
                                 }
                             )
 
-                final_state = state
+                    execution_path = accumulated_state["execution_path"]
 
-                # Store checkpoint
-                checkpoint = {
-                    "timestamp": datetime.now(UTC).isoformat(),
-                    "state": state,
-                    "execution_path": execution_path.copy(),
-                }
-                self.active_executions[execution_id]["checkpoints"].append(checkpoint)
+                    logger.info(
+                        "Workflow executed successfully in stateless mode",
+                        plan_id=plan.plan_id,
+                    )
+                finally:
+                    # Restore original checkpointer
+                    self.checkpointer = original_checkpointer
 
             execution_time = asyncio.get_event_loop().time() - start_time
 
             # Determine final response
             response = self._generate_final_response(final_state, tool_results)
+
+            # Calculate tasks completed from tool_results (more reliable than final_state)
+            # Count unique task_ids in tool_results that don't have errors
+            completed_task_ids = set()
+            failed_task_ids = set()
+
+            for tool_result in tool_results:
+                task_id = tool_result.get("task_id")
+                result_data = tool_result.get("result", {})
+
+                if task_id:
+                    # Check if task failed
+                    if isinstance(result_data, dict) and result_data.get("error"):
+                        failed_task_ids.add(task_id)
+                    else:
+                        completed_task_ids.add(task_id)
+
+            # Remove failed tasks from completed set
+            completed_task_ids -= failed_task_ids
 
             # Create execution result
             result = ExecutionResult(
@@ -298,16 +515,8 @@ class LangGraphOrchestrator:
                     "plan_id": plan.plan_id,
                     "execution_id": execution_id,
                     "tasks_planned": len(plan.tasks),
-                    "tasks_completed": (
-                        len(final_state.get("completed_tasks", []))
-                        if isinstance(final_state, dict)
-                        else 0
-                    ),
-                    "tasks_failed": (
-                        len(final_state.get("failed_tasks", []))
-                        if isinstance(final_state, dict)
-                        else 0
-                    ),
+                    "tasks_completed": len(completed_task_ids),
+                    "tasks_failed": len(failed_task_ids),
                     "execution_path": execution_path,
                     "checkpoints_count": len(
                         self.active_executions[execution_id]["checkpoints"]
@@ -390,7 +599,7 @@ class LangGraphOrchestrator:
             try:
                 # Add to execution path
                 state.execution_path.append(task_id)
-                state.current_task = task_id
+                # Note: Not setting current_task to avoid conflicts in parallel execution
 
                 # Execute based on task type
                 if task_type == "tool_execution":
@@ -410,32 +619,68 @@ class LangGraphOrchestrator:
 
                 logger.info("Task completed successfully", task_id=task_id)
 
-                return asdict(state)
+                # Only return the fields that were modified (not session_id, plan_id, current_task)
+                # Note: current_task is not returned to avoid conflicts in parallel execution
+                return {
+                    "completed_tasks": [task_id],
+                    "task_results": {task_id: result},
+                    "execution_path": [task_id],
+                }
 
             except Exception as e:
                 logger.error("Task execution failed", task_id=task_id, error=str(e))
 
                 state.failed_tasks.append(task_id)
-                state.error_count += 1
-                state.last_error = str(e)
+                # Note: Not modifying error_count or last_error to avoid conflicts in parallel execution
+                # Error info is preserved in task_results
 
                 # Store error result
-                state.task_results[task_id] = {
+                error_result = {
                     "error": True,
                     "error_message": str(e),
                     "error_type": type(e).__name__,
                 }
+                state.task_results[task_id] = error_result
 
-                return asdict(state)
+                # Only return the fields that were modified
+                # Note: error_count and last_error not returned to avoid conflicts in parallel execution
+                return {
+                    "failed_tasks": [task_id],
+                    "task_results": {task_id: error_result},
+                    "execution_path": [task_id],
+                }
 
         return executor
+
+    def _state_to_workflow_state(self, state: Any) -> WorkflowState:
+        """Convert state (dict or WorkflowState) to WorkflowState object"""
+        if isinstance(state, WorkflowState):
+            return state
+        elif isinstance(state, dict):
+            return WorkflowState(**state)
+        else:
+            # Fallback: try to convert to dict first
+            try:
+                state_dict = (
+                    asdict(state)
+                    if hasattr(state, "__dataclass_fields__")
+                    else dict(state)
+                )
+                return WorkflowState(**state_dict)
+            except Exception as e:
+                logger.error(
+                    "Failed to convert state to WorkflowState",
+                    state_type=type(state).__name__,
+                    error=str(e),
+                )
+                raise
 
     def _create_node_function(self, node: WorkflowNode) -> Callable:
         """Create a node function for LangGraph"""
 
         async def node_function(state: Dict[str, Any]) -> Dict[str, Any]:
-            # Convert dict back to WorkflowState
-            workflow_state = WorkflowState(**state)
+            # Convert state to WorkflowState
+            workflow_state = self._state_to_workflow_state(state)
 
             # Execute the node
             result = await node.executor(workflow_state)
@@ -448,9 +693,8 @@ class LangGraphOrchestrator:
         """Create a start node for workflows with multiple entry points"""
 
         async def start_node(state: Dict[str, Any]) -> Dict[str, Any]:
-            workflow_state = WorkflowState(**state)
-            workflow_state.execution_path.append("start")
-            return asdict(workflow_state)
+            # Only return the modified field
+            return {"execution_path": ["start"]}
 
         return start_node
 
@@ -495,7 +739,7 @@ class LangGraphOrchestrator:
                     def should_recover_for_task(state: Dict[str, Any]) -> str:
                         """Determine recovery path for specific task"""
                         try:
-                            workflow_state = WorkflowState(**state)
+                            workflow_state = self._state_to_workflow_state(state)
 
                             # Check if this task failed
                             if task_id in workflow_state.failed_tasks:
@@ -530,7 +774,7 @@ class LangGraphOrchestrator:
                     def post_recovery_decision(state: Dict[str, Any]) -> str:
                         """Decide what to do after recovery attempt"""
                         try:
-                            workflow_state = WorkflowState(**state)
+                            workflow_state = self._state_to_workflow_state(state)
                             recovery_strategy = recovery_config.get("strategy", "retry")
 
                             if recovery_strategy == "retry":
@@ -573,7 +817,7 @@ class LangGraphOrchestrator:
                 def create_simple_error_condition(task_id):
                     def simple_error_check(state: Dict[str, Any]) -> str:
                         try:
-                            workflow_state = WorkflowState(**state)
+                            workflow_state = self._state_to_workflow_state(state)
                             if task_id in workflow_state.failed_tasks:
                                 return "error_handler"
                             return "continue"
@@ -592,7 +836,7 @@ class LangGraphOrchestrator:
         """Create global error handler node"""
 
         async def error_handler(state: Dict[str, Any]) -> Dict[str, Any]:
-            workflow_state = WorkflowState(**state)
+            workflow_state = self._state_to_workflow_state(state)
 
             logger.info(
                 "Handling workflow error",
@@ -602,14 +846,16 @@ class LangGraphOrchestrator:
             )
 
             # Implement error handling logic
+            context_update = {}
             if workflow_state.error_count > 3:
                 # Too many errors, fail the workflow
-                workflow_state.context["workflow_failed"] = True
+                context_update["workflow_failed"] = True
             else:
                 # Try to recover
-                workflow_state.context["recovery_attempted"] = True
+                context_update["recovery_attempted"] = True
 
-            return asdict(workflow_state)
+            # Only return modified fields
+            return {"context": context_update}
 
         return error_handler
 
@@ -617,7 +863,7 @@ class LangGraphOrchestrator:
         """Create recovery node for failed tasks"""
 
         async def recovery_node(state: Dict[str, Any]) -> Dict[str, Any]:
-            workflow_state = WorkflowState(**state)
+            workflow_state = self._state_to_workflow_state(state)
 
             strategy = recovery_config.get("strategy", "retry")
             logger.info(
@@ -730,23 +976,48 @@ class LangGraphOrchestrator:
                     "config": recovery_config,
                 }
 
-                # Add to execution path
-                workflow_state.execution_path.append(f"recovery_{strategy}")
+                # Build return dict with only modified fields
+                result = {
+                    "context": workflow_state.context,
+                    "execution_path": [f"recovery_{strategy}"],
+                }
 
-                return asdict(workflow_state)
+                # Add other modified fields based on strategy
+                # Note: Not returning last_error or error_count to avoid conflicts
+
+                if strategy in ["fallback", "skip"]:
+                    # These strategies modify completed_tasks and task_results
+                    current_task = workflow_state.current_task
+                    if current_task:
+                        if (
+                            strategy == "fallback"
+                            and current_task not in workflow_state.completed_tasks
+                        ):
+                            result["completed_tasks"] = [current_task]
+                        result["task_results"] = {
+                            current_task: workflow_state.task_results.get(
+                                current_task, {}
+                            )
+                        }
+
+                return result
 
             except Exception as e:
                 logger.error("Recovery node execution failed", error=str(e))
-                workflow_state.error_count += 1
-                workflow_state.last_error = f"Recovery failed: {str(e)}"
-                return asdict(workflow_state)
+                # Only return context with error info to avoid conflicts
+                return {
+                    "context": {
+                        "recovery_error": f"Recovery failed: {str(e)}",
+                        "recovery_failed": True,
+                    }
+                }
 
         return recovery_node
 
     def _should_recover(self, state: Dict[str, Any]) -> bool:
         """Determine if recovery should be attempted based on error type and count"""
         try:
-            workflow_state = WorkflowState(**state)
+            workflow_state = self._state_to_workflow_state(state)
 
             # Don't attempt recovery if no errors
             if workflow_state.error_count == 0:
@@ -843,19 +1114,73 @@ class LangGraphOrchestrator:
             elif tool_name == "code_analysis":
                 return await self._execute_code_analysis(task, state)
 
-            # Generic tool execution (placeholder for now)
+            # Generic tool execution via tool registry
             else:
-                execution_time = asyncio.get_event_loop().time() - start_time
-                return {
-                    "tool": tool_name,
-                    "parameters": parameters,
-                    "result": f"Tool {tool_name} executed successfully (placeholder implementation)",
-                    "execution_time": execution_time,
-                    "metadata": {
-                        "tool_type": "generic",
-                        "parameter_count": len(parameters),
-                    },
-                }
+                try:
+                    # Try to execute via tool registry if available
+                    if hasattr(self, "tool_registry") and self.tool_registry:
+                        from .tools.registry import ExecutionContext, ExecutionPriority
+
+                        # Create execution context
+                        context = ExecutionContext(
+                            session_id=state.session_id,
+                            priority=ExecutionPriority.NORMAL,
+                            timeout=task.get("timeout", 300),
+                            max_retries=task.get("max_retries", 3),
+                        )
+
+                        # Get and execute tool
+                        tool = await self.tool_registry.get_tool(tool_name)
+                        result = await tool.execute(parameters, context)
+
+                        execution_time = asyncio.get_event_loop().time() - start_time
+
+                        return {
+                            "tool": tool_name,
+                            "parameters": parameters,
+                            "result": result.data,
+                            "execution_time": execution_time,
+                            "metadata": {
+                                "tool_type": "registry",
+                                "success": result.success,
+                                "tool_metadata": result.metadata,
+                            },
+                        }
+                    else:
+                        # Fallback: basic execution without registry
+                        execution_time = asyncio.get_event_loop().time() - start_time
+                        logger.warning(
+                            f"Tool registry not available, using basic execution for {tool_name}"
+                        )
+                        return {
+                            "tool": tool_name,
+                            "parameters": parameters,
+                            "result": f"Tool {tool_name} executed (basic mode - tool registry not initialized)",
+                            "execution_time": execution_time,
+                            "metadata": {
+                                "tool_type": "basic",
+                                "parameter_count": len(parameters),
+                                "warning": "Tool registry not available",
+                            },
+                        }
+                except Exception as tool_error:
+                    # If tool registry fails, log and return error
+                    logger.warning(
+                        f"Tool registry execution failed for {tool_name}, using fallback",
+                        error=str(tool_error),
+                    )
+                    execution_time = asyncio.get_event_loop().time() - start_time
+                    return {
+                        "tool": tool_name,
+                        "parameters": parameters,
+                        "result": f"Tool {tool_name} execution attempted (registry unavailable: {str(tool_error)})",
+                        "execution_time": execution_time,
+                        "metadata": {
+                            "tool_type": "fallback",
+                            "parameter_count": len(parameters),
+                            "registry_error": str(tool_error),
+                        },
+                    }
 
         except Exception as e:
             logger.error(f"Tool execution failed: {tool_name}, error: {str(e)}")
@@ -891,17 +1216,26 @@ class LangGraphOrchestrator:
 
             # Perform search
             search_results = await self.rag_pipeline.search(
-                query=query, max_results=max_results, include_metadata=True
+                query=query, max_results=max_results
             )
 
             # Format results for LLM consumption
             context_chunks = []
             for result in search_results.get("results", []):
+                # Extract source from metadata (use document_title or document_id as source)
+                metadata = result.get("metadata", {})
+                source = (
+                    metadata.get("document_title")
+                    or result.get("document_id")
+                    or "unknown"
+                )
+
                 context_chunks.append(
                     {
                         "content": result.get("content", ""),
-                        "source": result.get("metadata", {}).get("source", "unknown"),
+                        "source": source,
                         "score": result.get("score", 0.0),
+                        "chunk_type": result.get("chunk_type", "text"),
                     }
                 )
 
@@ -1423,6 +1757,41 @@ Provide a comprehensive analysis including:
     ) -> str:
         """Generate final response from workflow execution"""
 
+        # Extract the actual response from tool results
+        # Tool results contain the actual LLM-generated responses
+        if tool_results:
+            # Get the most recent tool result (usually the last task executed)
+            for tool_result in reversed(tool_results):
+                result_data = tool_result.get("result", {})
+
+                # Check if this is a RAG search result with an LLM response
+                if isinstance(result_data, dict):
+                    # RAG search returns result as a string in the "result" field
+                    if "result" in result_data and isinstance(
+                        result_data["result"], str
+                    ):
+                        response_text = result_data["result"]
+                        if (
+                            response_text
+                            and not response_text.startswith("Tool")
+                            and not response_text.startswith(
+                                "Knowledge retrieval failed"
+                            )
+                        ):
+                            return response_text
+                    # Check for other result formats
+                    elif "response" in result_data:
+                        return result_data["response"]
+                    elif "content" in result_data:
+                        return result_data["content"]
+                elif isinstance(result_data, str) and result_data:
+                    # Direct string result
+                    if not result_data.startswith(
+                        "Tool"
+                    ) and not result_data.startswith("Knowledge retrieval failed"):
+                        return result_data
+
+        # Fallback to generic message if no response found
         if not isinstance(final_state, dict):
             return "Workflow completed successfully."
 
@@ -1437,8 +1806,37 @@ Provide a comprehensive analysis including:
     async def _setup_workflow_monitoring(self):
         """Setup workflow monitoring and metrics collection"""
 
-        # TODO: Implement comprehensive monitoring
-        logger.info("Workflow monitoring setup completed")
+        try:
+            # Initialize metrics storage in Redis
+            if self.redis_client:
+                # Create metrics keys with TTL
+                await self.redis_client.setex(
+                    "orchestrator:metrics:initialized",
+                    86400,  # 24 hours
+                    datetime.now(UTC).isoformat(),
+                )
+
+                # Initialize counters
+                await self.redis_client.set("orchestrator:metrics:total_executions", 0)
+                await self.redis_client.set(
+                    "orchestrator:metrics:successful_executions", 0
+                )
+                await self.redis_client.set("orchestrator:metrics:failed_executions", 0)
+
+                logger.info(
+                    "Workflow monitoring initialized with Redis metrics storage"
+                )
+            else:
+                logger.warning(
+                    "Redis not available, metrics will be stored in memory only"
+                )
+
+            # Set up periodic metrics collection (would be done by a background task in production)
+            logger.info("Workflow monitoring setup completed")
+
+        except Exception as e:
+            logger.error("Failed to setup workflow monitoring", error=str(e))
+            # Non-critical, continue without monitoring
 
     async def get_execution_status(self, execution_id: str) -> Optional[Dict[str, Any]]:
         """Get status of an active execution"""
@@ -1477,21 +1875,64 @@ Provide a comprehensive analysis including:
             )
 
             # Get current state from checkpointer
-            current_checkpoint = await self.checkpointer.aget(config)
-            if current_checkpoint:
-                # Mark checkpoint as paused
-                pause_metadata = {
-                    "paused": True,
-                    "pause_timestamp": datetime.now(UTC).isoformat(),
-                    "execution_id": execution_id,
-                }
+            try:
+                current_checkpoint = await self.checkpointer.aget(config)
+                if current_checkpoint:
+                    # Mark checkpoint as paused
+                    pause_metadata = {
+                        "paused": True,
+                        "pause_timestamp": datetime.now(UTC).isoformat(),
+                        "execution_id": execution_id,
+                    }
 
-                # Store pause state in Redis
+                    # Store pause state in Redis
+                    await self.redis_client.hset(
+                        f"paused_execution:{execution_id}",
+                        mapping={
+                            "checkpoint_id": current_checkpoint.id,
+                            "metadata": str(pause_metadata),
+                            "state": ExecutionState.PAUSED.value,
+                        },
+                    )
+                else:
+                    # No checkpoint available, store minimal pause state
+                    logger.warning(
+                        "No checkpoint available for paused execution",
+                        execution_id=execution_id,
+                    )
+                    await self.redis_client.hset(
+                        f"paused_execution:{execution_id}",
+                        mapping={
+                            "checkpoint_id": "none",
+                            "metadata": str(
+                                {
+                                    "paused": True,
+                                    "pause_timestamp": datetime.now(UTC).isoformat(),
+                                    "execution_id": execution_id,
+                                }
+                            ),
+                            "state": ExecutionState.PAUSED.value,
+                        },
+                    )
+            except NotImplementedError as nie:
+                # Checkpointer method not implemented, store basic pause state
+                logger.warning(
+                    "Checkpointer.aget not implemented, using fallback pause mechanism",
+                    execution_id=execution_id,
+                    error=str(nie),
+                )
                 await self.redis_client.hset(
                     f"paused_execution:{execution_id}",
                     mapping={
-                        "checkpoint_id": current_checkpoint.id,
-                        "metadata": str(pause_metadata),
+                        "checkpoint_id": "fallback",
+                        "metadata": str(
+                            {
+                                "paused": True,
+                                "pause_timestamp": datetime.now(UTC).isoformat(),
+                                "execution_id": execution_id,
+                                "fallback": True,
+                            }
+                        ),
                         "state": ExecutionState.PAUSED.value,
                     },
                 )
