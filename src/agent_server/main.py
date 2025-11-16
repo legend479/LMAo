@@ -83,8 +83,10 @@ class AgentServer:
             # Create execution plan
             plan = await self.planning_module.create_plan(message, context)
 
-            # Execute plan through orchestrator
-            result = await self.orchestrator.execute_plan(plan, session_id)
+            # Execute plan through orchestrator with original query for synthesis
+            result = await self.orchestrator.execute_plan(
+                plan, session_id, original_query=message
+            )
 
             # Store conversation state
             await self.memory_manager.store_interaction(

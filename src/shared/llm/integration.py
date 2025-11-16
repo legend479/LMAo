@@ -101,6 +101,22 @@ class LLMIntegration:
                 else:
                     model = "gpt-3.5-turbo"  # Fallback
 
+            # ENHANCED LOGGING: Log LLM request details
+            logger.debug(
+                "LLM Request",
+                model=model,
+                provider=str(provider) if provider else "default",
+                temperature=temperature,
+                max_tokens=max_tokens,
+                system_prompt_length=len(system_prompt) if system_prompt else 0,
+                prompt_length=len(prompt),
+            )
+
+            # Log first 200 chars of prompt for debugging
+            logger.debug(f"LLM Prompt Preview: {prompt[:200]}...")
+            if system_prompt:
+                logger.debug(f"LLM System Prompt Preview: {system_prompt[:200]}...")
+
             request = LLMRequest(
                 messages=messages,
                 model=model,
@@ -110,6 +126,15 @@ class LLMIntegration:
             )
 
             response = await self._client.generate(request, provider)
+
+            # ENHANCED LOGGING: Log LLM response details
+            logger.debug(
+                "LLM Response",
+                response_length=len(response.content),
+                model_used=response.model if hasattr(response, "model") else model,
+            )
+            logger.debug(f"LLM Response Preview: {response.content[:200]}...")
+
             return response.content
 
         except Exception as e:
@@ -163,7 +188,7 @@ class LLMIntegration:
                 elif default_provider == LLMProvider.ANTHROPIC:
                     model = "claude-3-haiku-20240307"
                 elif default_provider == LLMProvider.GOOGLE:
-                    model = "gemini-2.5-flash "
+                    model = "gemini-2.5-flash"
                 elif default_provider == LLMProvider.OLLAMA:
                     model = "llama2"
                 else:
@@ -223,7 +248,7 @@ class LLMIntegration:
                 elif default_provider == LLMProvider.ANTHROPIC:
                     model = "claude-3-haiku-20240307"
                 elif default_provider == LLMProvider.GOOGLE:
-                    model = "gemini-2.5-flash "
+                    model = "gemini-2.5-flash"
                 elif default_provider == LLMProvider.OLLAMA:
                     model = "llama2"
                 else:

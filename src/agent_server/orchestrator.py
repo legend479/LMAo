@@ -89,6 +89,9 @@ class WorkflowState:
     error_count: int = 0
     last_error: Optional[str] = None
     execution_path: Annotated[List[str], operator.add] = None
+    # CONVERSATIONAL FIX: Store original query for response synthesis
+    original_query: Optional[str] = None
+    conversation_history: List[Dict[str, Any]] = None
 
     def __post_init__(self):
         if self.completed_tasks is None:
@@ -101,6 +104,8 @@ class WorkflowState:
             self.context = {}
         if self.execution_path is None:
             self.execution_path = []
+        if self.conversation_history is None:
+            self.conversation_history = []
 
 
 class WorkflowNode:
@@ -283,11 +288,14 @@ class LangGraphOrchestrator:
         return compiled_workflow
 
     async def execute_plan(
-        self, plan: ExecutionPlan, session_id: str
+        self, plan: ExecutionPlan, session_id: str, original_query: str = None
     ) -> ExecutionResult:
         """Execute a plan using LangGraph workflow management"""
         logger.info(
-            "Executing plan with LangGraph", plan_id=plan.plan_id, session_id=session_id
+            "Executing plan with LangGraph",
+            plan_id=plan.plan_id,
+            session_id=session_id,
+            original_query=original_query[:100] if original_query else None,
         )
 
         execution_id = f"{session_id}_{plan.plan_id}"
@@ -302,6 +310,7 @@ class LangGraphOrchestrator:
             "completed_tasks": [],
             "failed_tasks": [],
             "checkpoints": [],
+            "original_query": original_query,  # Store for logging
         }
 
         try:
@@ -311,11 +320,12 @@ class LangGraphOrchestrator:
 
             workflow = self.workflow_graphs[plan.plan_id]
 
-            # Create initial state
+            # Create initial state with original query
             initial_state = WorkflowState(
                 session_id=session_id,
                 plan_id=plan.plan_id,
                 context={"execution_id": execution_id, "start_time": start_time},
+                original_query=original_query,  # CONVERSATIONAL FIX: Pass original query
             )
 
             # Configure execution
@@ -486,8 +496,10 @@ class LangGraphOrchestrator:
 
             execution_time = asyncio.get_event_loop().time() - start_time
 
-            # Determine final response
-            response = self._generate_final_response(final_state, tool_results)
+            # Determine final response with synthesis
+            response = await self._generate_final_response(
+                final_state, tool_results, original_query
+            )
 
             # Calculate tasks completed from tool_results (more reliable than final_state)
             # Count unique task_ids in tool_results that don't have errors
@@ -1711,7 +1723,7 @@ Provide a comprehensive analysis including:
     async def _execute_general_task(
         self, task: Dict[str, Any], state: WorkflowState
     ) -> Dict[str, Any]:
-        """Execute general task"""
+        """Execute general task with full conversation context"""
 
         start_time = asyncio.get_event_loop().time()
 
@@ -1721,61 +1733,117 @@ Provide a comprehensive analysis including:
             context = task.get("context", {})
             task_type = task.get("task_type", "general_query")
 
+            # CONVERSATIONAL FIX: Use original query if available
+            original_query = state.original_query or query
+
+            # CONVERSATIONAL FIX: Gather context from previous task results
+            previous_context = []
+            if state.task_results:
+                for task_id, result in state.task_results.items():
+                    if isinstance(result, dict) and "result" in result:
+                        result_content = result["result"]
+                        if isinstance(result_content, str) and len(result_content) > 20:
+                            previous_context.append(
+                                f"Previous information: {result_content[:500]}"
+                            )
+
             # Create system prompt based on task type
             if task_type == "question_answering":
-                system_prompt = """You are a knowledgeable software engineering expert. Answer questions accurately and comprehensively.
+                system_prompt = """You are a knowledgeable software engineering expert engaged in a helpful conversation. 
+Answer questions accurately and comprehensively, building on any previous context.
                 
                 Guidelines:
+                - Directly address the user's question
+                - Build on previous conversation context
                 - Provide clear, accurate answers
                 - Include relevant examples when helpful
                 - Explain complex concepts in understandable terms
-                - Cite best practices and industry standards
-                - If uncertain, acknowledge limitations
+                - Maintain conversational flow
                 """
             elif task_type == "explanation":
-                system_prompt = """You are an expert technical educator. Explain concepts clearly and thoroughly.
+                system_prompt = """You are an expert technical educator having a conversation with a learner. 
+Explain concepts clearly and thoroughly, building on what's been discussed.
                 
                 Guidelines:
                 - Break down complex topics into digestible parts
                 - Use analogies and examples to clarify concepts
-                - Structure explanations logically
+                - Build on previous explanations
                 - Consider the audience's technical level
-                - Provide practical context and applications
+                - Maintain conversational continuity
                 """
             elif task_type == "recommendation":
-                system_prompt = """You are a software engineering consultant. Provide thoughtful recommendations.
+                system_prompt = """You are a software engineering consultant in conversation with a client. 
+Provide thoughtful recommendations that build on the discussion.
                 
                 Guidelines:
-                - Consider multiple approaches and trade-offs
+                - Consider the full conversation context
                 - Provide specific, actionable recommendations
-                - Explain the reasoning behind suggestions
-                - Consider context and constraints
-                - Highlight potential risks and benefits
+                - Explain reasoning behind suggestions
+                - Consider constraints mentioned earlier
+                - Maintain conversational flow
                 """
             else:
-                system_prompt = """You are a helpful software engineering assistant. Provide accurate and useful responses.
+                system_prompt = """You are a helpful software engineering assistant engaged in a natural conversation. 
+Provide accurate and useful responses that build on the ongoing discussion.
                 
                 Guidelines:
-                - Be helpful and informative
+                - Maintain conversation continuity
+                - Reference previous context when relevant
                 - Provide accurate technical information
-                - Structure responses clearly
-                - Include relevant examples
-                - Be concise but comprehensive
+                - Be conversational and helpful
+                - Build comprehensive answers
                 """
 
-            # Add context to the prompt if available
+            # Build comprehensive prompt with all context
+            prompt_parts = []
+
+            # Add original query context
+            if original_query and original_query != query:
+                prompt_parts.append(f"Original User Question: {original_query}")
+
+            # Add previous context
+            if previous_context:
+                prompt_parts.append("\nPrevious Context:")
+                prompt_parts.extend(previous_context[:3])  # Limit to 3 most recent
+
+            # Add task-specific context
             if context:
-                context_str = "\n".join([f"{k}: {v}" for k, v in context.items()])
-                full_prompt = f"Context:\n{context_str}\n\nQuery: {query}"
-            else:
-                full_prompt = query
+                prompt_parts.append("\nAdditional Context:")
+                for k, v in context.items():
+                    if not k.startswith("_"):  # Skip internal context
+                        prompt_parts.append(f"- {k}: {v}")
+
+            # Add current query
+            prompt_parts.append(f"\nCurrent Query: {query}")
+            prompt_parts.append(
+                "\nPlease provide a comprehensive, conversational response that addresses the query while building on the context above."
+            )
+
+            full_prompt = "\n".join(prompt_parts)
+
+            # Log the prompt for debugging
+            logger.debug(
+                "Executing general task with LLM",
+                task_type=task_type,
+                original_query=original_query[:100] if original_query else None,
+                query=query[:100],
+                has_previous_context=bool(previous_context),
+                prompt_length=len(full_prompt),
+            )
 
             # Generate response using LLM
             response = await self.llm_integration.generate_response(
                 prompt=full_prompt,
                 system_prompt=system_prompt,
-                temperature=0.6,
+                temperature=0.7,  # Slightly higher for more natural conversation
                 max_tokens=1500,
+            )
+
+            logger.info(
+                "General task completed",
+                task_type=task_type,
+                response_length=len(response),
+                used_context=bool(previous_context),
             )
 
             execution_time = asyncio.get_event_loop().time() - start_time
@@ -1788,6 +1856,7 @@ Provide a comprehensive analysis including:
                     "task_type": task_type,
                     "query_length": len(query),
                     "context_provided": bool(context),
+                    "previous_context_used": bool(previous_context),
                     "response_length": len(response),
                 },
             }
@@ -1804,13 +1873,36 @@ Provide a comprehensive analysis including:
                 "error_message": str(e),
             }
 
-    def _generate_final_response(
-        self, final_state: Dict[str, Any], tool_results: List[Dict[str, Any]]
+    async def _generate_final_response(
+        self,
+        final_state: Dict[str, Any],
+        tool_results: List[Dict[str, Any]],
+        original_query: str = None,
     ) -> str:
-        """Generate final response from workflow execution"""
+        """Generate coherent final response with LLM synthesis"""
 
-        # Extract the actual response from tool results
-        # Tool results contain the actual LLM-generated responses
+        logger.debug(
+            "Generating final response",
+            tool_results_count=len(tool_results),
+            original_query=original_query[:100] if original_query else None,
+        )
+
+        # Extract original query from state if not provided
+        if not original_query and isinstance(final_state, dict):
+            original_query = final_state.get("original_query")
+
+        # If we have tool results and original query, synthesize a coherent response
+        if tool_results and original_query and self.llm_integration:
+            try:
+                return await self._synthesize_coherent_response(
+                    original_query, tool_results, final_state
+                )
+            except Exception as e:
+                logger.error(
+                    f"Response synthesis failed: {e}, falling back to extraction"
+                )
+
+        # Fallback: Extract the best available response from tool results
         if tool_results:
             # Get the most recent tool result (usually the last task executed)
             for tool_result in reversed(tool_results):
@@ -1845,15 +1937,104 @@ Provide a comprehensive analysis including:
 
         # Fallback to generic message if no response found
         if not isinstance(final_state, dict):
-            return "Workflow completed successfully."
+            return "I've processed your request. How else can I help you?"
 
         completed_tasks = final_state.get("completed_tasks", [])
         failed_tasks = final_state.get("failed_tasks", [])
 
         if failed_tasks:
-            return f"Workflow completed with {len(completed_tasks)} successful tasks and {len(failed_tasks)} failed tasks. Some operations may need to be retried."
+            return f"I encountered some issues while processing your request. I completed {len(completed_tasks)} tasks successfully, but {len(failed_tasks)} tasks failed. Would you like me to try a different approach?"
         else:
-            return f"Workflow completed successfully. All {len(completed_tasks)} tasks were executed successfully."
+            return f"I've completed processing your request. Is there anything else you'd like to know?"
+
+    async def _synthesize_coherent_response(
+        self,
+        original_query: str,
+        tool_results: List[Dict[str, Any]],
+        final_state: Dict[str, Any],
+    ) -> str:
+        """Synthesize a coherent response using LLM that directly answers the original query"""
+
+        # Gather all relevant information from tool results
+        gathered_info = []
+        for i, tool_result in enumerate(tool_results):
+            task_id = tool_result.get("task_id", f"task_{i}")
+            result_data = tool_result.get("result", {})
+
+            # Extract meaningful content
+            content = None
+            if isinstance(result_data, dict):
+                content = (
+                    result_data.get("result")
+                    or result_data.get("response")
+                    or result_data.get("content")
+                )
+                # Also check for data field
+                if not content and "data" in result_data:
+                    content = str(result_data["data"])
+            elif isinstance(result_data, str):
+                content = result_data
+
+            if content and not content.startswith("Tool") and len(content) > 10:
+                gathered_info.append(
+                    {"task": task_id, "content": content[:2000]}  # Limit length
+                )
+
+        # If no meaningful content gathered, return fallback
+        if not gathered_info:
+            return "I've processed your request, but I don't have enough information to provide a detailed answer. Could you please rephrase your question?"
+
+        # Build context for synthesis
+        context_parts = []
+        for info in gathered_info:
+            context_parts.append(f"From {info['task']}:\n{info['content']}\n")
+
+        context_text = "\n".join(context_parts)
+
+        # Create synthesis prompt
+        system_prompt = """You are a helpful AI assistant engaged in a natural conversation. 
+Your task is to synthesize information from various sources into a coherent, conversational response that directly answers the user's question.
+
+Guidelines:
+- Directly address the user's original question
+- Synthesize information from all provided sources into a unified answer
+- Maintain a conversational, helpful tone
+- Don't mention "tools" or "tasks" - speak naturally
+- If information is incomplete, acknowledge it naturally
+- Build on the conversation context
+- Provide actionable insights when possible
+"""
+
+        synthesis_prompt = f"""Original User Question: {original_query}
+
+Information Gathered:
+{context_text}
+
+Please provide a comprehensive, conversational response that directly answers the user's question by synthesizing the information above. 
+Speak naturally as if you're having a conversation, not listing tool outputs."""
+
+        logger.debug(
+            "Synthesizing response with LLM",
+            original_query=original_query[:100],
+            context_length=len(context_text),
+            sources_count=len(gathered_info),
+        )
+
+        # Generate synthesized response
+        synthesized_response = await self.llm_integration.generate_response(
+            prompt=synthesis_prompt,
+            system_prompt=system_prompt,
+            temperature=0.7,  # Balanced for natural conversation
+            max_tokens=1500,
+        )
+
+        logger.info(
+            "Response synthesized successfully",
+            response_length=len(synthesized_response),
+            sources_used=len(gathered_info),
+        )
+
+        return synthesized_response
 
     async def _setup_workflow_monitoring(self):
         """Setup workflow monitoring and metrics collection"""
