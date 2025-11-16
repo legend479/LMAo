@@ -588,7 +588,7 @@ class LangGraphOrchestrator:
             )
 
     def _create_task_executor(self, task: Dict[str, Any]) -> Callable:
-        """Create an executor function for a task"""
+        """Create an executor function for a task with proper context chaining"""
 
         async def executor(state: WorkflowState) -> Dict[str, Any]:
             task_id = task["id"]
@@ -599,7 +599,44 @@ class LangGraphOrchestrator:
             try:
                 # Add to execution path
                 state.execution_path.append(task_id)
-                # Note: Not setting current_task to avoid conflicts in parallel execution
+
+                # CRITICAL FIX: Build dependency context from completed tasks
+                dependency_context = {}
+                task_dependencies = task.get("dependencies", [])
+
+                for dep_id in task_dependencies:
+                    if dep_id in state.task_results:
+                        dep_result = state.task_results[dep_id]
+                        # Make dependency results available to current task
+                        dependency_context[f"dependency_{dep_id}"] = dep_result
+
+                        # Extract key information from dependency
+                        if isinstance(dep_result, dict):
+                            if "result" in dep_result:
+                                dependency_context[f"{dep_id}_result"] = dep_result[
+                                    "result"
+                                ]
+                            if "data" in dep_result:
+                                dependency_context[f"{dep_id}_data"] = dep_result[
+                                    "data"
+                                ]
+
+                # Inject dependency context into task parameters
+                if dependency_context:
+                    if "parameters" not in task:
+                        task["parameters"] = {}
+                    task["parameters"]["_dependency_context"] = dependency_context
+
+                    # Also add to task context for direct access
+                    if "context" not in task:
+                        task["context"] = {}
+                    task["context"].update(dependency_context)
+
+                    logger.debug(
+                        "Injected dependency context",
+                        task_id=task_id,
+                        dependencies=list(dependency_context.keys()),
+                    )
 
                 # Execute based on task type
                 if task_type == "tool_execution":
@@ -613,17 +650,22 @@ class LangGraphOrchestrator:
                 else:
                     result = await self._execute_general_task(task, state)
 
-                # Store result
-                state.task_results[task_id] = result
+                # Store result with metadata about dependencies used
+                result_with_metadata = {
+                    **result,
+                    "dependencies_used": list(dependency_context.keys()),
+                    "task_id": task_id,
+                }
+
+                state.task_results[task_id] = result_with_metadata
                 state.completed_tasks.append(task_id)
 
                 logger.info("Task completed successfully", task_id=task_id)
 
-                # Only return the fields that were modified (not session_id, plan_id, current_task)
-                # Note: current_task is not returned to avoid conflicts in parallel execution
+                # Return only modified fields
                 return {
                     "completed_tasks": [task_id],
-                    "task_results": {task_id: result},
+                    "task_results": {task_id: result_with_metadata},
                     "execution_path": [task_id],
                 }
 
@@ -631,19 +673,21 @@ class LangGraphOrchestrator:
                 logger.error("Task execution failed", task_id=task_id, error=str(e))
 
                 state.failed_tasks.append(task_id)
-                # Note: Not modifying error_count or last_error to avoid conflicts in parallel execution
-                # Error info is preserved in task_results
 
-                # Store error result
+                # Store error result with context
                 error_result = {
                     "error": True,
                     "error_message": str(e),
                     "error_type": type(e).__name__,
+                    "task_id": task_id,
+                    "dependencies_attempted": (
+                        list(dependency_context.keys())
+                        if "dependency_context" in locals()
+                        else []
+                    ),
                 }
                 state.task_results[task_id] = error_result
 
-                # Only return the fields that were modified
-                # Note: error_count and last_error not returned to avoid conflicts in parallel execution
                 return {
                     "failed_tasks": [task_id],
                     "task_results": {task_id: error_result},

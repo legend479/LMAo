@@ -131,6 +131,55 @@ class Settings(BaseSettings):
         default=False, description="Enable email automation tools"
     )
 
+    # Tool Execution Settings
+    tool_timeout_seconds: int = Field(
+        default=300, description="Default tool execution timeout"
+    )
+    tool_max_retries: int = Field(
+        default=3, description="Maximum retries for failed tools"
+    )
+    tool_concurrent_limit: int = Field(
+        default=5, description="Maximum concurrent tool executions"
+    )
+
+    # Code Execution Tool Configuration
+    code_execution_sandbox_enabled: bool = Field(
+        default=True, description="Enable sandboxing for code execution"
+    )
+    code_execution_timeout: int = Field(
+        default=60, description="Code execution timeout in seconds"
+    )
+    code_execution_max_memory_mb: int = Field(
+        default=512, description="Maximum memory for code execution in MB"
+    )
+    code_execution_allowed_languages: str = Field(
+        default="python,javascript,java",
+        description="Comma-separated list of allowed languages",
+    )
+
+    # Email Tool Configuration
+    email_smtp_host: Optional[str] = Field(default=None, description="SMTP server host")
+    email_smtp_port: int = Field(default=587, description="SMTP server port")
+    email_smtp_username: Optional[str] = Field(
+        default=None, description="SMTP username"
+    )
+    email_smtp_password: Optional[str] = Field(
+        default=None, description="SMTP password"
+    )
+    email_from_address: Optional[str] = Field(
+        default=None, description="From email address"
+    )
+    email_from_name: str = Field(default="SE SME Agent", description="From name")
+
+    # Knowledge Retrieval Tool Configuration
+    rag_max_results: int = Field(default=5, description="Maximum RAG search results")
+    rag_similarity_threshold: float = Field(
+        default=0.7, description="Minimum similarity threshold for RAG results"
+    )
+    rag_rerank_enabled: bool = Field(
+        default=True, description="Enable reranking of RAG results"
+    )
+
     # Performance
     max_concurrent_requests: int = Field(
         default=100, description="Maximum concurrent requests"

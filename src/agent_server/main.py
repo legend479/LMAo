@@ -28,32 +28,44 @@ class AgentServer:
         self._initialized = False
 
     async def initialize(self):
-        """Initialize all agent components"""
+        """Initialize all agent components in correct order"""
         if self._initialized:
             return
 
         logger.info("Initializing Agent Server")
 
-        # Initialize components
-        await self.orchestrator.initialize()
-        await self.planning_module.initialize()
-        await self.memory_manager.initialize()
-        await self.tool_registry.initialize()
-
-        # Connect orchestrator to tool registry
-        self.orchestrator.set_tool_registry(self.tool_registry)
-
-        # Auto-register default tools
         try:
+            # Step 1: Initialize tool registry FIRST
+            await self.tool_registry.initialize()
+            logger.info("Tool registry initialized")
+
+            # Step 2: Initialize orchestrator and connect to tool registry
+            await self.orchestrator.initialize()
+            self.orchestrator.set_tool_registry(self.tool_registry)
+            logger.info("Orchestrator initialized and connected to tool registry")
+
+            # Step 3: Auto-register default tools (orchestrator is now ready)
             from .tools.auto_register import register_default_tools
 
             registered_tool_ids = await register_default_tools(self.tool_registry)
             logger.info(f"Auto-registered {len(registered_tool_ids)} default tools")
-        except Exception as e:
-            logger.warning(f"Failed to auto-register tools: {str(e)}")
 
-        self._initialized = True
-        logger.info("Agent Server initialized successfully")
+            # Step 4: Initialize planning module
+            await self.planning_module.initialize()
+            logger.info("Planning module initialized")
+
+            # Step 5: Initialize memory manager
+            await self.memory_manager.initialize()
+            logger.info("Memory manager initialized")
+
+            self._initialized = True
+            logger.info("Agent Server initialized successfully")
+
+        except Exception as e:
+            logger.error(f"Failed to initialize Agent Server: {e}")
+            # Cleanup any partially initialized components
+            await self.shutdown()
+            raise
 
     async def process_message(
         self, message: str, session_id: str, user_id: Optional[str] = None
