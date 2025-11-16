@@ -133,7 +133,7 @@ class AgentServer:
                 max_retries=3,
             )
 
-            tool = await self.tool_registry.get_tool(tool_name)
+            tool = await self.tool_registry.get_tool_by_name(tool_name)
             result = await tool.execute(parameters, context)
 
             return {

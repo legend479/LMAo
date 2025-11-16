@@ -126,10 +126,10 @@ class Settings(BaseSettings):
 
     # Tool Configuration
     enable_code_execution: bool = Field(
-        default=False, description="Enable code execution tools"
+        default=True, description="Enable code execution tools"
     )
     enable_email_tools: bool = Field(
-        default=False, description="Enable email automation tools"
+        default=True, description="Enable email automation tools"
     )
 
     # Tool Execution Settings
@@ -192,7 +192,7 @@ class Settings(BaseSettings):
     metrics_port: int = Field(default=9090, description="Metrics server port")
 
     model_config = ConfigDict(
-        env_file=".env", env_file_encoding="utf-8", case_sensitive=False, frozen=True
+        env_file=".env", env_file_encoding="utf-8", case_sensitive=False, frozen=True,extra="ignore"
     )
 
 

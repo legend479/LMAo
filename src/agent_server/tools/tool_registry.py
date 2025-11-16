@@ -1147,6 +1147,29 @@ class ToolRegistryManager:
         await self.db.save_tool(metadata)
         self.tool_cache[tool_id] = metadata
 
+    async def get_tool_by_name(self, tool_name: str) -> Optional[BaseTool]:
+        """Get tool instance by its friendly name from the ACTIVE cache."""
+        
+        # Iterate through the live, cached tool instances
+        for tool_id, tool_instance in self.active_tools.items():
+            
+            # Check the metadata cache for the corresponding tool_id
+            # We get metadata from tool_cache, not the instance, to get the name
+            metadata = self.tool_cache.get(tool_id)
+            
+            # Check if metadata exists and the name matches
+            if metadata and metadata.name == tool_name:
+                return tool_instance  # Found it
+        
+        # If the loop finishes, the tool is not active or doesn't exist
+        logger.error(
+            "Tool not found in active_tools cache", 
+            tool_name=tool_name,
+            active_tools_count=len(self.active_tools),
+            available_tools=list(self.active_tools.keys())
+        )
+        return None
+
 
 class PerformanceMonitor:
     """Tool performance monitoring and analytics"""

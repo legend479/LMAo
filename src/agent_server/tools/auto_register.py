@@ -10,137 +10,118 @@ from .registry import BaseTool
 logger = get_logger(__name__)
 
 
+# In auto_register.py
+
 async def register_default_tools(registry) -> List[str]:
     """
-    Register default tools based on configuration
-
-    Args:
-        registry: ToolRegistryManager instance
-
-    Returns:
-        List of registered tool IDs
+    Register default tools based on configuration.
+    This function ensures tools are in the database AND loaded into the
+    active_tools cache for execution.
     """
     settings = get_settings()
     registered_tools = []
 
-    logger.info("Starting tool registration with configuration-based enablement")
+    logger.info("Starting tool registration and loading active cache...")
 
-    # Check if tools are already registered to avoid duplicates
-    existing_tools = await registry.list_tools_metadata()
-    existing_tool_names = {tool.name for tool in existing_tools}
+    # Get a map of tool metadata already in the database (Name -> Metadata)
+    existing_tools_metadata = await registry.list_tools_metadata()
+    existing_tool_map = {tool.name: tool for tool in existing_tools_metadata}
+    logger.info(f"Found {len(existing_tool_map)} existing tool metadata records.")
 
-    logger.info(f"Found {len(existing_tool_names)} existing tools in registry")
-
-    # Always register safe, core tools
-    try:
-        if "knowledge_retrieval" not in existing_tool_names:
-            from .knowledge_retrieval import KnowledgeRetrievalTool
-
-            tool = KnowledgeRetrievalTool()
-            await tool.initialize()
-            tool_id = await registry.register_tool(
-                tool=tool,
-                author="system",
-                tags=["default", "built-in", "core"],
-                validation_score=1.0,
-            )
-            registered_tools.append(tool_id)
-            logger.info("Registered knowledge_retrieval tool")
-        else:
-            logger.info("knowledge_retrieval tool already registered")
-    except Exception as e:
-        logger.error(f"Failed to register knowledge_retrieval tool: {e}")
-
-    try:
-        if "readability_scoring" not in existing_tool_names:
-            from .readability_scoring import ReadabilityScoringTool
-
-            tool = ReadabilityScoringTool()
-            await tool.initialize()
-            tool_id = await registry.register_tool(
-                tool=tool,
-                author="system",
-                tags=["default", "built-in", "analysis"],
-                validation_score=1.0,
-            )
-            registered_tools.append(tool_id)
-            logger.info("Registered readability_scoring tool")
-        else:
-            logger.info("readability_scoring tool already registered")
-    except Exception as e:
-        logger.error(f"Failed to register readability_scoring tool: {e}")
-
-    try:
-        if "document_generation" not in existing_tool_names:
-            from .document_generation import DocumentGenerationTool
-
-            tool = DocumentGenerationTool()
-            await tool.initialize()
-            tool_id = await registry.register_tool(
-                tool=tool,
-                author="system",
-                tags=["default", "built-in", "generation"],
-                validation_score=1.0,
-            )
-            registered_tools.append(tool_id)
-            logger.info("Registered document_generation tool")
-        else:
-            logger.info("document_generation tool already registered")
-    except Exception as e:
-        logger.error(f"Failed to register document_generation tool: {e}")
-
-    # Conditionally register code execution tools
-    if settings.enable_code_execution:
+    # A helper function to handle the registration/loading logic
+    async def load_or_register_tool(
+        tool_instance: BaseTool,
+        tool_name: str,  # The canonical, snake_case name
+        author: str,
+        tags: List[str],
+        validation_score: float = 1.0,
+    ):
         try:
-            if "compiler_runtime" not in existing_tool_names:
-                from .compiler_runtime import CompilerRuntimeTool
-
-                tool = CompilerRuntimeTool()
-                await tool.initialize()
+            await tool_instance.initialize()
+            
+            if tool_name not in existing_tool_map:
+                # --- Tool is NOT in the database ---
+                # Register it for the first time.
+                # register_tool() will save metadata AND add to active_tools.
+                logger.info(f"Registering new tool: {tool_name}")
                 tool_id = await registry.register_tool(
-                    tool=tool,
-                    author="system",
-                    tags=["default", "built-in", "code-execution"],
-                    validation_score=1.0,
+                    tool=tool_instance,
+                    author=author,
+                    tags=tags,
+                    validation_score=validation_score,
                 )
                 registered_tools.append(tool_id)
-                logger.info("Registered compiler_runtime tool (code execution enabled)")
+            
             else:
-                logger.info("compiler_runtime tool already registered")
+                # --- Tool IS in the database ---
+                # We MUST manually add its instance to the active_tools cache.
+                logger.info(f"Loading existing tool into active cache: {tool_name}")
+                existing_metadata = existing_tool_map[tool_name]
+                
+                # Manually add the instance to the live cache
+                registry.active_tools[existing_metadata.id] = tool_instance
+                
+                # Also update the metadata cache to ensure it's fresh
+                # (in case the tool's schema changed)
+                registry.tool_cache[existing_metadata.id] = existing_metadata
+                
+                registered_tools.append(existing_metadata.id)
+
         except Exception as e:
-            logger.error(f"Failed to register compiler_runtime tool: {e}")
-    else:
-        logger.info(
-            "Code execution tools disabled by configuration (ENABLE_CODE_EXECUTION=false)"
-        )
+            logger.error(f"Failed to load or register tool '{tool_name}': {e}")
 
-    # Conditionally register email tools
-    if settings.enable_email_tools:
-        try:
-            if "email_automation" not in existing_tool_names:
-                from .email_automation import EmailAutomationTool
-
-                tool = EmailAutomationTool()
-                await tool.initialize()
-                tool_id = await registry.register_tool(
-                    tool=tool,
-                    author="system",
-                    tags=["default", "built-in", "communication"],
-                    validation_score=1.0,
-                )
-                registered_tools.append(tool_id)
-                logger.info("Registered email_automation tool (email tools enabled)")
-            else:
-                logger.info("email_automation tool already registered")
-        except Exception as e:
-            logger.error(f"Failed to register email_automation tool: {e}")
-    else:
-        logger.info("Email tools disabled by configuration (ENABLE_EMAIL_TOOLS=false)")
-
-    logger.info(
-        f"Tool registration complete. Registered {len(registered_tools)} new tools"
+    # --- Register Core Tools ---
+    from .knowledge_retrieval import KnowledgeRetrievalTool
+    await load_or_register_tool(
+        tool_instance=KnowledgeRetrievalTool(),
+        tool_name="knowledge_retrieval",
+        author="system",
+        tags=["default", "built-in", "core"],
     )
 
+    from .readability_scoring import ReadabilityScoringTool
+    await load_or_register_tool(
+        tool_instance=ReadabilityScoringTool(),
+        tool_name="readability_scoring",
+        author="system",
+        tags=["default", "built-in", "analysis"],
+    )
+
+    from .document_generation import DocumentGenerationTool
+    await load_or_register_tool(
+        tool_instance=DocumentGenerationTool(),
+        tool_name="document_generation",
+        author="system",
+        tags=["default", "built-in", "generation"],
+    )
+
+    # --- Conditionally Register Code Execution ---
+    if settings.enable_code_execution:
+        from .compiler_runtime import CompilerRuntimeTool
+        await load_or_register_tool(
+            tool_instance=CompilerRuntimeTool(),
+            tool_name="compiler_runtime",
+            author="system",
+            tags=["default", "built-in", "code-execution"],
+        )
+    else:
+        logger.info("Code execution tools disabled by configuration.")
+
+    # --- Conditionally Register Email ---
+    if settings.enable_email_tools:
+        from .email_automation import EmailAutomationTool
+        await load_or_register_tool(
+            tool_instance=EmailAutomationTool(),
+            tool_name="email_automation",
+            author="system",
+            tags=["default", "built-in", "communication"],
+        )
+    else:
+        logger.info("Email tools disabled by configuration.")
+
+    logger.info(
+        f"Tool registration complete. {len(registered_tools)} tools loaded into active cache."
+    )
     return registered_tools
 
 
