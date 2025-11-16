@@ -342,7 +342,6 @@ class ContentAnalyzer:
             if line_stripped.startswith(("- ", "* ", "+ ")) or re.match(
                 r"^\d+\.\s", line_stripped
             ):
-
                 if not in_list:
                     in_list = True
                     list_type = (

@@ -1236,10 +1236,11 @@ class AdaptiveContentGenerator:
                 AudienceLevel.K12_ELEMENTARY,
             ]:
                 target_readability = 0.7  # High readability
-                final_content, final_readability = (
-                    await self.content_transformer.optimize_readability(
-                        final_content, target_readability
-                    )
+                (
+                    final_content,
+                    final_readability,
+                ) = await self.content_transformer.optimize_readability(
+                    final_content, target_readability
                 )
             else:
                 final_readability = (

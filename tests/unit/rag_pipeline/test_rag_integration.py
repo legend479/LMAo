@@ -92,7 +92,6 @@ class TestRAGPipelineIntegration:
                 "src.rag_pipeline.embedding_manager.EmbeddingConfig"
             ) as mock_embedding_config,
         ):
-
             # Mock config classes
             mock_ingestion_config.return_value = Mock()
             mock_es_config.return_value = Mock()
@@ -154,7 +153,6 @@ class TestRAGPipelineIntegration:
                 "src.rag_pipeline.embedding_manager.EmbeddingConfig"
             ) as mock_embedding_config,
         ):
-
             # Mock config classes
             mock_ingestion_config.return_value = Mock()
             mock_es_config.return_value = Mock()
@@ -269,7 +267,6 @@ class TestRAGPipelineIntegration:
                 "src.rag_pipeline.embedding_manager.EmbeddingConfig"
             ) as mock_embedding_config,
         ):
-
             # Mock config classes
             mock_ingestion_config.return_value = Mock()
             mock_es_config.return_value = Mock()
@@ -350,7 +347,6 @@ class TestRAGPipelineIntegration:
                 "src.rag_pipeline.embedding_manager.EmbeddingConfig"
             ) as mock_embedding_config,
         ):
-
             # Mock config classes
             mock_ingestion_config.return_value = Mock()
             mock_es_config.return_value = Mock()
@@ -436,7 +432,6 @@ class TestRAGPipelineIntegration:
                 "src.rag_pipeline.embedding_manager.EmbeddingConfig"
             ) as mock_embedding_config,
         ):
-
             # Mock config classes
             mock_ingestion_config.return_value = Mock()
             mock_es_config.return_value = Mock()
@@ -569,7 +564,6 @@ class TestComponentDependencyResolution:
             patch("src.rag_pipeline.search_engine.SearchConfig"),
             patch("src.rag_pipeline.embedding_manager.EmbeddingConfig"),
         ):
-
             # Mock component initialization
             for mock_component in [
                 mock_doc_processor,

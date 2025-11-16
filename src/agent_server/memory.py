@@ -602,6 +602,10 @@ class MemoryManager:
             list
         )
 
+        # Locking mechanism for thread-safe operations
+        self._conversation_locks: Dict[str, asyncio.Lock] = {}
+        self._lock_manager_lock = asyncio.Lock()
+
         # Components
         self.context_pruner = ContextPruner()
         self.summarizer = ConversationSummarizer()
@@ -614,6 +618,13 @@ class MemoryManager:
         self.summary_trigger_threshold = 50  # Create summary after 50 messages
 
         self._initialized = False
+
+    async def _get_conversation_lock(self, session_id: str) -> asyncio.Lock:
+        """Get or create lock for a conversation session"""
+        async with self._lock_manager_lock:
+            if session_id not in self._conversation_locks:
+                self._conversation_locks[session_id] = asyncio.Lock()
+            return self._conversation_locks[session_id]
 
     async def initialize(self):
         """Initialize enhanced memory manager"""
@@ -777,66 +788,72 @@ class MemoryManager:
         agent_result: ExecutionResult,
         user_id: Optional[str] = None,
     ):
-        """Store interaction with enhanced metadata and analysis"""
+        """Store interaction with enhanced metadata and analysis (thread-safe)"""
 
-        timestamp = datetime.utcnow()
+        # Acquire lock for this session to prevent race conditions
+        lock = await self._get_conversation_lock(session_id)
+        async with lock:
+            timestamp = datetime.utcnow()
 
-        # Initialize session if needed
-        if session_id not in self.session_metadata:
-            self.session_metadata[session_id] = {
-                "created_at": timestamp,
-                "message_count": 0,
-                "user_id": user_id,
-            }
+            # Initialize session if needed
+            if session_id not in self.session_metadata:
+                self.session_metadata[session_id] = {
+                    "created_at": timestamp,
+                    "message_count": 0,
+                    "user_id": user_id,
+                }
 
-        if user_id:
-            self.session_metadata[session_id]["user_id"] = user_id
+            if user_id:
+                self.session_metadata[session_id]["user_id"] = user_id
 
-            # Initialize user profile if needed
-            if user_id not in self.user_profiles:
-                self.user_profiles[user_id] = UserProfile(user_id=user_id)
+                # Initialize user profile if needed
+                if user_id not in self.user_profiles:
+                    self.user_profiles[user_id] = UserProfile(user_id=user_id)
 
-        # Analyze and enhance user message
-        user_msg = await self._create_enhanced_message(
-            content=user_message,
-            role=MessageRole.USER,
-            timestamp=timestamp,
-            session_id=session_id,
-            user_id=user_id,
-        )
+            # Analyze and enhance user message
+            user_msg = await self._create_enhanced_message(
+                content=user_message,
+                role=MessageRole.USER,
+                timestamp=timestamp,
+                session_id=session_id,
+                user_id=user_id,
+            )
 
-        # Analyze and enhance agent response
-        agent_msg = await self._create_enhanced_message(
-            content=agent_result.response,
-            role=MessageRole.ASSISTANT,
-            timestamp=timestamp,
-            session_id=session_id,
-            user_id=user_id,
-            execution_metadata={
-                "execution_time": agent_result.execution_time,
-                "state": agent_result.state.value,
-                "tool_results": agent_result.tool_results,
-                **agent_result.metadata,
-            },
-        )
+            # Analyze and enhance agent response
+            agent_msg = await self._create_enhanced_message(
+                content=agent_result.response,
+                role=MessageRole.ASSISTANT,
+                timestamp=timestamp,
+                session_id=session_id,
+                user_id=user_id,
+                execution_metadata={
+                    "execution_time": agent_result.execution_time,
+                    "state": agent_result.state.value,
+                    "tool_results": agent_result.tool_results,
+                    **agent_result.metadata,
+                },
+            )
 
-        # Store messages
-        self.conversations[session_id].append(user_msg)
-        self.conversations[session_id].append(agent_msg)
+            # Store messages
+            self.conversations[session_id].append(user_msg)
+            self.conversations[session_id].append(agent_msg)
 
-        # Update session metadata
-        self.session_metadata[session_id]["message_count"] += 2
-        self.session_metadata[session_id]["last_activity"] = timestamp
+            # Update session metadata
+            self.session_metadata[session_id]["message_count"] += 2
+            self.session_metadata[session_id]["last_activity"] = timestamp
 
-        # Update user profile
-        if user_id:
-            await self._update_user_profile(user_id, user_msg, agent_msg)
+            # Update user profile
+            if user_id:
+                await self._update_user_profile(user_id, user_msg, agent_msg)
 
-        # Check if we need to create a summary
-        if len(self.conversations[session_id]) % self.summary_trigger_threshold == 0:
-            await self._create_conversation_summary(session_id)
+            # Check if we need to create a summary
+            if (
+                len(self.conversations[session_id]) % self.summary_trigger_threshold
+                == 0
+            ):
+                await self._create_conversation_summary(session_id)
 
-        # Persist to Redis if available
+            # Persist to Redis if available
         if self.redis_client:
             await self._persist_to_redis(session_id, user_msg, agent_msg)
 

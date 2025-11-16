@@ -127,9 +127,11 @@ class TestConfigValidator:
 
         with patch.object(validator, "_is_valid_host", return_value=True):
             with patch.object(validator, "_is_valid_url", return_value=True):
-                errors, warnings, recommendations = (
-                    validator._validate_network_settings()
-                )
+                (
+                    errors,
+                    warnings,
+                    recommendations,
+                ) = validator._validate_network_settings()
 
         assert any(
             "Port 8000 is used by multiple services" in error for error in errors
@@ -328,9 +330,11 @@ class TestValidationEdgeCases:
         with patch.object(validator, "_is_valid_host", return_value=True):
             with patch.object(validator, "_is_valid_url", return_value=True):
                 with patch.object(validator, "_is_port_available", return_value=True):
-                    errors, warnings, recommendations = (
-                        validator._validate_network_settings()
-                    )
+                    (
+                        errors,
+                        warnings,
+                        recommendations,
+                    ) = validator._validate_network_settings()
 
         # Should handle extreme values and provide warnings
         assert isinstance(warnings, list)

@@ -600,7 +600,6 @@ class TestFullSystemWorkflows:
         # Mock all system components
         with patch("src.shared.services.get_agent_client") as mock_get_agent:
             with patch("src.shared.services.get_rag_client") as mock_get_rag:
-
                 # Setup comprehensive mocks
                 mock_agent = AsyncMock()
                 mock_agent.process_message = AsyncMock(

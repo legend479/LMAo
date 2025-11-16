@@ -10,7 +10,7 @@ from fastapi import (
     Depends,
     HTTPException,
 )
-from pydantic import BaseModel, Field, field_serializer
+from pydantic import BaseModel, Field, field_serializer, field_validator
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 import json
@@ -26,13 +26,54 @@ router = APIRouter()
 
 
 class ChatMessage(BaseModel):
-    message: str
-    session_id: Optional[str] = None
-    user_id: Optional[str] = None
+    message: str = Field(
+        ..., min_length=1, max_length=10000, description="Chat message content"
+    )
+    session_id: Optional[str] = Field(
+        None, max_length=100, description="Session identifier"
+    )
+    user_id: Optional[str] = Field(None, max_length=100, description="User identifier")
     message_type: str = Field(
         default="user", description="Type of message: user, system, agent"
     )
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("message")
+    @classmethod
+    def validate_message(cls, v: str) -> str:
+        """Validate and sanitize message content"""
+        if not v or not v.strip():
+            raise ValueError("Message cannot be empty")
+
+        # Check for potentially dangerous content
+        dangerous_patterns = [
+            "<script>",
+            "</script>",
+            "javascript:",
+            "onerror=",
+            "onclick=",
+        ]
+        message_lower = v.lower()
+        for pattern in dangerous_patterns:
+            if pattern in message_lower:
+                raise ValueError(
+                    f"Message contains potentially dangerous content: {pattern}"
+                )
+
+        # Strip excessive whitespace
+        return v.strip()
+
+    @field_validator("session_id")
+    @classmethod
+    def validate_session_id(cls, v: Optional[str]) -> Optional[str]:
+        """Validate session ID format"""
+        if v is not None:
+            # Remove any non-alphanumeric characters except hyphens and underscores
+            import re
+
+            if not re.match(r"^[a-zA-Z0-9_-]+$", v):
+                raise ValueError("Session ID contains invalid characters")
+        return v
 
 
 class ChatResponse(BaseModel):

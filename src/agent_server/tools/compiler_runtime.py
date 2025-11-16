@@ -30,6 +30,12 @@ from src.shared.logging import get_logger
 logger = get_logger(__name__)
 
 
+class SecurityError(Exception):
+    """Raised when a security violation is detected"""
+
+    pass
+
+
 @dataclass
 class LanguageConfig:
     """Configuration for a programming language"""
@@ -848,11 +854,37 @@ class CompilerRuntimeTool(BaseTool):
     async def execute(
         self, parameters: Dict[str, Any], context: ExecutionContext
     ) -> ToolResult:
-        """Execute code compilation and runtime evaluation"""
+        """Execute code compilation and runtime evaluation with mandatory sandboxing"""
 
         start_time = time.time()
 
         try:
+            # SECURITY: Verify sandboxing is enabled
+            from src.shared.config import get_settings
+
+            settings = get_settings()
+
+            # Check if code execution is enabled at all
+            if not settings.enable_code_execution:
+                raise SecurityError(
+                    "Code execution is disabled. Set ENABLE_CODE_EXECUTION=true in configuration."
+                )
+
+            # MANDATORY: Enforce sandboxing for security
+            sandbox_enabled = getattr(settings, "code_execution_sandbox_enabled", True)
+            if not sandbox_enabled:
+                raise SecurityError(
+                    "Code execution requires sandboxing to be enabled for security. "
+                    "Set CODE_EXECUTION_SANDBOX_ENABLED=true in configuration. "
+                    "Running arbitrary code without sandboxing is a critical security risk."
+                )
+
+            logger.info(
+                "Code execution security check passed",
+                sandbox_enabled=True,
+                session_id=context.session_id,
+            )
+
             # Extract parameters
             code = parameters.get("code", "")
             language = parameters.get("language", "python").lower()

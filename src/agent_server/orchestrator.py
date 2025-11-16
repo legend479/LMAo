@@ -8,7 +8,7 @@ import asyncio
 import redis.asyncio as redis
 from dataclasses import dataclass, asdict
 from enum import Enum
-from datetime import datetime, UTC
+from datetime import datetime, UTC, timedelta
 import operator
 
 from langgraph.graph import StateGraph, END
@@ -137,14 +137,35 @@ class LangGraphOrchestrator:
         self.execution_history: Dict[str, List[ExecutionResult]] = {}
         self.workflow_graphs: Dict[str, StateGraph] = {}
         self.workflow_nodes: Dict[str, Dict[str, WorkflowNode]] = {}
+        self.workflow_timestamps: Dict[str, datetime] = (
+            {}
+        )  # Track workflow creation time
         self.llm_integration = None
         self.tool_registry = None  # Will be set by AgentServer
         self._initialized = False
+
+        # Workflow cleanup configuration
+        self.max_cached_workflows = 100
+        self.workflow_ttl_hours = 24
 
     def set_tool_registry(self, tool_registry):
         """Set the tool registry for generic tool execution"""
         self.tool_registry = tool_registry
         logger.info("Tool registry configured for orchestrator")
+
+    async def _redis_operation_with_timeout(
+        self, operation, timeout_seconds: float = 5.0
+    ):
+        """Execute Redis operation with timeout protection"""
+        try:
+            async with asyncio.timeout(timeout_seconds):
+                return await operation
+        except asyncio.TimeoutError:
+            logger.error(f"Redis operation timed out after {timeout_seconds} seconds")
+            raise
+        except Exception as e:
+            logger.error(f"Redis operation failed: {e}")
+            raise
 
     async def initialize(self):
         """Initialize the orchestrator with Redis and LangGraph components"""
@@ -222,7 +243,10 @@ class LangGraphOrchestrator:
             raise
 
     async def create_workflow_graph(self, plan: ExecutionPlan) -> StateGraph:
-        """Create a LangGraph workflow from an execution plan"""
+        """Create a LangGraph workflow from an execution plan with automatic cleanup"""
+
+        # Clean up old workflows before creating new one
+        await self._cleanup_old_workflows()
 
         # Create state graph
         workflow = StateGraph(WorkflowState)
@@ -282,10 +306,49 @@ class LangGraphOrchestrator:
                 plan_id=plan.plan_id,
             )
 
-        # Store compiled workflow
+        # Store compiled workflow with timestamp
         self.workflow_graphs[plan.plan_id] = compiled_workflow
+        self.workflow_timestamps[plan.plan_id] = datetime.now(UTC)
+
+        # Enforce size limit (LRU eviction)
+        if len(self.workflow_graphs) > self.max_cached_workflows:
+            # Remove oldest workflow
+            oldest_plan_id = min(self.workflow_timestamps.items(), key=lambda x: x[1])[
+                0
+            ]
+            del self.workflow_graphs[oldest_plan_id]
+            if oldest_plan_id in self.workflow_nodes:
+                del self.workflow_nodes[oldest_plan_id]
+            del self.workflow_timestamps[oldest_plan_id]
+            logger.info(
+                f"Evicted old workflow due to cache size limit: {oldest_plan_id}"
+            )
 
         return compiled_workflow
+
+    async def _cleanup_old_workflows(self):
+        """Remove workflows older than TTL"""
+        cutoff_time = datetime.now(UTC) - timedelta(hours=self.workflow_ttl_hours)
+
+        expired_plans = [
+            plan_id
+            for plan_id, timestamp in self.workflow_timestamps.items()
+            if timestamp < cutoff_time
+        ]
+
+        for plan_id in expired_plans:
+            if plan_id in self.workflow_graphs:
+                del self.workflow_graphs[plan_id]
+            if plan_id in self.workflow_nodes:
+                del self.workflow_nodes[plan_id]
+            if plan_id in self.workflow_timestamps:
+                del self.workflow_timestamps[plan_id]
+
+        if expired_plans:
+            logger.info(
+                f"Cleaned up {len(expired_plans)} expired workflows",
+                cutoff_time=cutoff_time.isoformat(),
+            )
 
     async def execute_plan(
         self, plan: ExecutionPlan, session_id: str, original_query: str = None
@@ -2020,21 +2083,63 @@ Speak naturally as if you're having a conversation, not listing tool outputs."""
             sources_count=len(gathered_info),
         )
 
-        # Generate synthesized response
-        synthesized_response = await self.llm_integration.generate_response(
-            prompt=synthesis_prompt,
-            system_prompt=system_prompt,
-            temperature=0.7,  # Balanced for natural conversation
-            max_tokens=1500,
+        # Generate synthesized response with error handling
+        try:
+            synthesized_response = await self.llm_integration.generate_response(
+                prompt=synthesis_prompt,
+                system_prompt=system_prompt,
+                temperature=0.7,  # Balanced for natural conversation
+                max_tokens=1500,
+            )
+
+            # Validate response quality
+            if not synthesized_response or len(synthesized_response.strip()) < 10:
+                logger.warning(
+                    "LLM returned empty or very short response, using fallback"
+                )
+                return self._create_fallback_response(original_query, gathered_info)
+
+            logger.info(
+                "Response synthesized successfully",
+                response_length=len(synthesized_response),
+                sources_used=len(gathered_info),
+            )
+
+            return synthesized_response
+
+        except asyncio.TimeoutError:
+            logger.error("LLM synthesis timed out, using fallback")
+            return self._create_fallback_response(original_query, gathered_info)
+        except Exception as e:
+            logger.error(f"LLM synthesis failed: {e}, using fallback")
+            return self._create_fallback_response(original_query, gathered_info)
+
+    def _create_fallback_response(
+        self, original_query: str, gathered_info: List[Dict[str, Any]]
+    ) -> str:
+        """Create fallback response when LLM synthesis fails"""
+
+        if not gathered_info:
+            return "I apologize, but I encountered an issue processing your request. Could you please try rephrasing your question?"
+
+        # Extract the most relevant content
+        response_parts = [f"Based on your question: '{original_query[:100]}...'"]
+
+        for i, info in enumerate(gathered_info[:2], 1):  # Use top 2 sources
+            content = info.get("content", "")
+            if content and len(content) > 20:
+                # Truncate long content
+                truncated_content = (
+                    content[:300] + "..." if len(content) > 300 else content
+                )
+                response_parts.append(f"\n\nFrom source {i}:\n{truncated_content}")
+
+        response_parts.append(
+            "\n\nI've gathered this information for you. "
+            "Would you like me to elaborate on any specific aspect?"
         )
 
-        logger.info(
-            "Response synthesized successfully",
-            response_length=len(synthesized_response),
-            sources_used=len(gathered_info),
-        )
-
-        return synthesized_response
+        return "".join(response_parts)
 
     async def _setup_workflow_monitoring(self):
         """Setup workflow monitoring and metrics collection"""

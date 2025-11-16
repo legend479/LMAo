@@ -109,7 +109,6 @@ class OpenAIProvider(BaseLLMProvider):
             async with self.client.stream(
                 "POST", "/chat/completions", json=openai_request
             ) as response:
-
                 if response.status_code != 200:
                     error_text = await response.aread()
                     raise LLMError(f"OpenAI API error: {error_text}")

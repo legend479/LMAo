@@ -286,7 +286,6 @@ class TestLoadTesting:
                 "src.shared.database.DocumentOperations.create_document"
             ) as mock_create_doc,
         ):
-
             # Mock document creation to return a document object
             from datetime import datetime
 
@@ -477,7 +476,6 @@ class TestMemoryAndResourceUsage:
             "src.shared.services.get_agent_client",
             new=AsyncMock(return_value=mock_client),
         ):
-
             memory_samples = []
 
             # Send requests and monitor memory
@@ -559,7 +557,6 @@ class TestMemoryAndResourceUsage:
                 "src.shared.services.get_agent_client",
                 new=AsyncMock(return_value=mock_client),
             ):
-
                 # Send concurrent requests
                 tasks = []
                 for i in range(50):
@@ -664,7 +661,6 @@ class TestStressTests:
                 "src.shared.services.get_agent_client",
                 new=AsyncMock(return_value=mock_client),
             ):
-
                 start_time = time.time()
 
                 response = await client.post(

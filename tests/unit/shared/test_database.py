@@ -384,7 +384,6 @@ class TestDatabaseManager:
                     return_value=mock_db_config,
                 ),
             ):
-
                 manager = DatabaseManager()
 
                 # Test engine creation
@@ -425,7 +424,6 @@ class TestDatabaseManager:
                     return_value=mock_db_config,
                 ),
             ):
-
                 manager = DatabaseManager()
 
                 # Initialize database

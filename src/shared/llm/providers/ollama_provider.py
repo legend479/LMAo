@@ -98,7 +98,6 @@ class OllamaProvider(BaseLLMProvider):
             async with self.client.stream(
                 "POST", "/api/chat", json=ollama_request
             ) as response:
-
                 if response.status_code != 200:
                     error_text = await response.aread()
                     raise LLMError(f"Ollama API error: {error_text}")
@@ -163,7 +162,6 @@ class OllamaProvider(BaseLLMProvider):
             async with self.client.stream(
                 "POST", "/api/pull", json=pull_request
             ) as response:
-
                 if response.status_code != 200:
                     error_text = await response.aread()
                     raise LLMError(f"Failed to pull model: {error_text}")

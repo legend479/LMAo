@@ -79,7 +79,6 @@ class TestPlanningModule:
                                 with patch.object(
                                     module, "_identify_parallel_execution_groups"
                                 ) as mock_parallel:
-
                                     # Setup mocks
                                     mock_analyze.return_value = QueryAnalysis(
                                         intent=IntentType.CODE_GENERATION,
@@ -154,7 +153,6 @@ class TestQueryAnalysis:
                                         with patch.object(
                                             module, "_calculate_analysis_confidence"
                                         ) as mock_confidence:
-
                                             # Setup mocks
                                             mock_intent.return_value = (
                                                 IntentType.CODE_GENERATION
@@ -595,7 +593,6 @@ class TestPlanningEdgeCases:
                                         with patch.object(
                                             module, "_calculate_analysis_confidence"
                                         ) as mock_confidence:
-
                                             # Setup mocks for empty query
                                             mock_intent.return_value = (
                                                 IntentType.GENERAL_QUERY
@@ -652,7 +649,6 @@ class TestPlanningEdgeCases:
                                 with patch.object(
                                     module, "_identify_parallel_execution_groups"
                                 ) as mock_parallel:
-
                                     # Setup mocks for no goals scenario
                                     mock_analyze.return_value = QueryAnalysis(
                                         intent=IntentType.GENERAL_QUERY,

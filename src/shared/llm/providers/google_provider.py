@@ -118,7 +118,6 @@ class GoogleProvider(BaseLLMProvider):
             async with self.client.stream(
                 "POST", endpoint, json=google_request
             ) as response:
-
                 if response.status_code != 200:
                     error_text = await response.aread()
                     raise LLMError(f"Google AI API error: {error_text}")

@@ -877,7 +877,6 @@ class ToolRegistryManager:
 
         for tool in deprecated_tools:
             if tool.deprecation_date and tool.deprecation_date < cutoff_date:
-
                 await self.delete_tool(tool.id)
                 logger.info(
                     "Cleaned up deprecated tool", tool_id=tool.id, tool_name=tool.name
@@ -1755,7 +1754,6 @@ class RecommendationEngine:
                     and tool.total_executions > 10
                     and tool.successful_executions / max(tool.total_executions, 1) > 0.7
                 ):
-
                     # Calculate trending score
                     usage_score = min(1.0, tool.total_executions / 100)
                     success_score = tool.successful_executions / tool.total_executions
@@ -2218,9 +2216,12 @@ class AnalyticsEngine:
                 if not metrics or metrics[0] == 0:
                     return {"health_score": 0.0, "status": "no_data"}
 
-                total_executions, success_rate, avg_execution_time, unique_users = (
-                    metrics
-                )
+                (
+                    total_executions,
+                    success_rate,
+                    avg_execution_time,
+                    unique_users,
+                ) = metrics
 
                 # Calculate component scores (0-1)
 

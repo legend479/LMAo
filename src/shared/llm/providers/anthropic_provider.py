@@ -120,7 +120,6 @@ class AnthropicProvider(BaseLLMProvider):
             async with self.client.stream(
                 "POST", "/v1/messages", json=anthropic_request
             ) as response:
-
                 if response.status_code != 200:
                     error_text = await response.aread()
                     raise LLMError(f"Anthropic API error: {error_text}")

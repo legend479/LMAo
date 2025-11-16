@@ -55,7 +55,8 @@ class Settings(BaseSettings):
 
     # Security
     secret_key: str = Field(
-        default="your-secret-key-change-in-production", description="Secret key for JWT"
+        default="dev-secret-key-CHANGE-IN-PRODUCTION",
+        description="Secret key for JWT (MUST be changed in production)",
     )
     access_token_expire_minutes: int = Field(
         default=30, description="Access token expiration in minutes"
@@ -212,13 +213,19 @@ class ProductionSettings(Settings):
 
     def __init__(self, **kwargs):
         # Check for required production fields
-        if (
-            "secret_key" not in kwargs
-            and os.getenv("SECRET_KEY") == "your-secret-key-change-in-production"
-        ):
-            raise ValueError("SECRET_KEY must be set for production environment")
+        secret_key = kwargs.get("secret_key") or os.getenv("SECRET_KEY")
+        if not secret_key or secret_key in [
+            "your-secret-key-change-in-production",
+            "dev-secret-key-CHANGE-IN-PRODUCTION",
+        ]:
+            raise ValueError(
+                "SECRET_KEY must be changed for production environment. "
+                "Generate a secure key with: python -c 'import secrets; print(secrets.token_urlsafe(32))'"
+            )
+
         if "database_url" not in kwargs and not os.getenv("DATABASE_URL"):
             raise ValueError("DATABASE_URL must be set for production environment")
+
         super().__init__(**kwargs)
 
 

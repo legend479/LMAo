@@ -150,7 +150,6 @@ def mock_rag_pipeline():
             with patch(
                 "src.rag_pipeline.search_engine.HybridSearchEngine"
             ) as mock_search_engine:
-
                 # Setup mock embedding manager
                 mock_embedding_instance = AsyncMock()
                 mock_embedding_instance.initialize.return_value = None
