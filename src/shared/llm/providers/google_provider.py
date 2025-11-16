@@ -80,6 +80,22 @@ class GoogleProvider(BaseLLMProvider):
                 parts = candidate["content"]["parts"]
                 content = "".join(part.get("text", "") for part in parts)
 
+            # Check for safety ratings or blocked content
+            if not content:
+                # Log the full candidate for debugging
+                logger.warning(
+                    "Empty content from Google AI",
+                    candidate=candidate,
+                    finish_reason=candidate.get("finishReason"),
+                    safety_ratings=candidate.get("safetyRatings"),
+                )
+
+                # Check if content was blocked
+                if candidate.get("finishReason") == "SAFETY":
+                    raise LLMError(
+                        "Content blocked by safety filters", provider=LLMProvider.GOOGLE
+                    )
+
             # Extract usage information
             usage = {}
             if "usageMetadata" in response:

@@ -481,8 +481,38 @@ class KnowledgeRetrievalTool(BaseTool):
 
             execution_time = time.time() - start_time
 
-            result = ToolResult(
+            # NEW: Create structured output for better tool chaining
+            from .tool_output_schema import create_knowledge_output
+
+            structured_output = create_knowledge_output(
                 data=result_data,
+                summary=self._generate_result_summary(search_result, query),
+                tool_name="knowledge_retrieval",
+                retrieved_chunks=search_result["results"],
+                execution_time=execution_time,
+                confidence_score=confidence_score,
+                quality_score=relevance_score,
+                key_findings=self._extract_key_findings(search_result["results"]),
+                entities_extracted=(
+                    scope_result.detected_entities if scope_result else []
+                ),
+                recommendations=self._generate_recommendations(search_result),
+                context_for_next_tool={
+                    "query": query,
+                    "total_sources": search_result["total_results"],
+                    "search_type": search_result.get("search_type", "hybrid"),
+                    "domain": (
+                        scope_result.domain_classification
+                        if scope_result
+                        else "unknown"
+                    ),
+                },
+                query_reformulation=search_result.get("query_reformulation"),
+            )
+
+            # Convert to ToolResult for backward compatibility
+            result = ToolResult(
+                data=structured_output.to_dict(),
                 metadata={
                     "tool": "knowledge_retrieval",
                     "version": "3.0.0",
@@ -493,8 +523,15 @@ class KnowledgeRetrievalTool(BaseTool):
                     "priority": context.priority.value,
                     "cache_hit": False,
                     "processing_strategy": "rag_with_scope_detection",
-                    "scope_confidence": scope_result.confidence,
-                    "domain_classification": scope_result.domain_classification,
+                    "scope_confidence": (
+                        scope_result.confidence if scope_result else 1.0
+                    ),
+                    "domain_classification": (
+                        scope_result.domain_classification
+                        if scope_result
+                        else "unknown"
+                    ),
+                    "structured_output": True,  # Flag for structured output
                 },
                 execution_time=execution_time,
                 success=True,
@@ -1254,3 +1291,52 @@ class KnowledgeRetrievalTool(BaseTool):
                 logger.warning(f"Error during RAG pipeline cleanup: {e}")
 
         self.rag_pipeline = None
+
+    def _generate_result_summary(
+        self, search_result: Dict[str, Any], query: str
+    ) -> str:
+        """Generate concise summary of search results"""
+        total_results = search_result.get("total_results", 0)
+        search_type = search_result.get("search_type", "hybrid")
+
+        if total_results == 0:
+            return f"No results found for query: '{query[:50]}...'"
+
+        return f"Found {total_results} relevant results using {search_type} search for: '{query[:50]}...'"
+
+    def _extract_key_findings(self, results: List[Dict[str, Any]]) -> List[str]:
+        """Extract key findings from search results"""
+        findings = []
+
+        # Extract from top 3 results
+        for result in results[:3]:
+            content = result.get("content", "")
+            # Extract first sentence or first 100 chars
+            first_sentence = content.split(".")[0] if "." in content else content[:100]
+            if first_sentence and first_sentence not in findings:
+                findings.append(first_sentence.strip())
+
+        return findings[:5]  # Return top 5 findings
+
+    def _generate_recommendations(self, search_result: Dict[str, Any]) -> List[str]:
+        """Generate recommendations based on search results"""
+        recommendations = []
+
+        total_results = search_result.get("total_results", 0)
+
+        if total_results == 0:
+            recommendations.append(
+                "Try reformulating the query with different keywords"
+            )
+            recommendations.append(
+                "Check if the topic is within the knowledge base scope"
+            )
+        elif total_results < 3:
+            recommendations.append("Consider broadening the search query")
+            recommendations.append("Try using related terms or synonyms")
+        else:
+            recommendations.append("Review top results for most relevant information")
+            if total_results > 10:
+                recommendations.append("Consider adding filters to narrow down results")
+
+        return recommendations

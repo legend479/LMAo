@@ -25,6 +25,16 @@ class AgentServer:
         self.planning_module = PlanningModule()
         self.memory_manager = MemoryManager()
         self.tool_registry = ToolExecutionRegistry()
+
+        # Feedback and learning components
+        self.feedback_collector = None
+        self.feedback_analyzer = None
+        self.feedback_learning = None
+
+        # Feature flags
+        self.enable_feedback = True
+        self.enable_learning = True
+
         self._initialized = False
 
     async def initialize(self):
@@ -58,8 +68,25 @@ class AgentServer:
             await self.memory_manager.initialize()
             logger.info("Memory manager initialized")
 
+            # Step 6: Initialize feedback and learning systems
+            if self.enable_feedback:
+                from .feedback_system import FeedbackCollector, FeedbackAnalyzer
+
+                self.feedback_collector = FeedbackCollector()
+                self.feedback_analyzer = FeedbackAnalyzer()
+                await self.feedback_collector.initialize()
+                await self.feedback_analyzer.initialize()
+                logger.info("Feedback system initialized")
+
+            if self.enable_learning:
+                from .feedback_learning import FeedbackLearningSystem
+
+                self.feedback_learning = FeedbackLearningSystem()
+                await self.feedback_learning.initialize()
+                logger.info("Learning system initialized")
+
             self._initialized = True
-            logger.info("Agent Server initialized successfully")
+            logger.info("Agent Server initialized successfully with all enhancements")
 
         except Exception as e:
             logger.error(f"Failed to initialize Agent Server: {e}")
@@ -153,6 +180,141 @@ class AgentServer:
                 "error": str(e),
                 "execution_time": 0.0,
             }
+
+    async def collect_feedback(
+        self,
+        session_id: str,
+        query: str,
+        response: str,
+        rating: Optional[float] = None,
+        text_feedback: Optional[str] = None,
+        user_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Collect user feedback"""
+        if not self.enable_feedback or not self.feedback_collector:
+            return {"success": False, "error": "Feedback system not enabled"}
+
+        try:
+            from .feedback_system import FeedbackType, FeedbackCategory
+
+            feedback = await self.feedback_collector.collect_feedback(
+                session_id=session_id,
+                feedback_type=(
+                    FeedbackType.RELEVANCE_RATING
+                    if rating
+                    else FeedbackType.DETAILED_FEEDBACK
+                ),
+                category=FeedbackCategory.OVERALL_SATISFACTION,
+                query=query,
+                response=response,
+                rating=rating,
+                text_feedback=text_feedback,
+                user_id=user_id,
+            )
+
+            return {
+                "success": True,
+                "feedback_id": feedback.feedback_id,
+                "timestamp": feedback.timestamp,
+            }
+        except Exception as e:
+            logger.error(f"Failed to collect feedback: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def analyze_feedback(self, days: int = 7) -> Dict[str, Any]:
+        """Analyze recent feedback"""
+        if not self.enable_feedback or not self.feedback_analyzer:
+            return {"success": False, "error": "Feedback system not enabled"}
+
+        try:
+            recent_feedback = self.feedback_collector.get_recent_feedback(days=days)
+
+            if not recent_feedback:
+                return {
+                    "success": True,
+                    "message": "No feedback to analyze",
+                    "feedback_count": 0,
+                }
+
+            analysis = await self.feedback_analyzer.analyze_feedback(
+                recent_feedback, days
+            )
+
+            return {
+                "success": True,
+                "feedback_count": len(recent_feedback),
+                "analysis": {
+                    "total_feedback": analysis.total_feedback,
+                    "positive_feedback": analysis.positive_feedback,
+                    "negative_feedback": analysis.negative_feedback,
+                    "average_rating": analysis.average_rating,
+                    "common_issues": analysis.common_issues,
+                    "suggested_improvements": analysis.suggested_improvements,
+                },
+            }
+        except Exception as e:
+            logger.error(f"Failed to analyze feedback: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def learn_from_feedback(
+        self, days: int = 7, auto_apply: bool = False
+    ) -> Dict[str, Any]:
+        """Learn from feedback and generate optimizations"""
+        if not self.enable_learning or not self.feedback_learning:
+            return {"success": False, "error": "Learning system not enabled"}
+
+        try:
+            recent_feedback = self.feedback_collector.get_recent_feedback(days=days)
+
+            if len(recent_feedback) < 10:
+                return {
+                    "success": False,
+                    "error": f"Insufficient feedback: {len(recent_feedback)} < 10",
+                }
+
+            analysis = await self.feedback_analyzer.analyze_feedback(
+                recent_feedback, days
+            )
+            insights = await self.feedback_learning.learn_from_feedback(
+                recent_feedback, analysis
+            )
+
+            application_result = None
+            if auto_apply:
+                application_result = await self.feedback_learning.apply_optimizations(
+                    insights, auto_apply=True
+                )
+
+            return {
+                "success": True,
+                "feedback_analyzed": len(recent_feedback),
+                "insights": {
+                    "prompt_optimizations": len(insights.prompt_optimizations),
+                    "strategy_adjustments": len(insights.strategy_adjustments),
+                    "recommendations": insights.recommendations,
+                },
+                "optimizations_applied": application_result is not None,
+                "application_result": application_result,
+            }
+        except Exception as e:
+            logger.error(f"Failed to learn from feedback: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def get_feedback_stats(self) -> Dict[str, Any]:
+        """Get feedback statistics"""
+        if not self.enable_feedback or not self.feedback_collector:
+            return {"enabled": False}
+
+        try:
+            health = await self.feedback_collector.health_check()
+            return {
+                "enabled": True,
+                "total_feedback": health.get("total_feedback", 0),
+                "feedback_by_category": health.get("feedback_by_category", {}),
+                "recent_feedback_7d": health.get("recent_feedback_7d", 0),
+            }
+        except Exception as e:
+            return {"enabled": True, "error": str(e)}
 
     async def shutdown(self):
         """Shutdown agent server and cleanup resources"""
