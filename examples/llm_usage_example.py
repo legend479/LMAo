@@ -5,6 +5,10 @@ Demonstrates how to use the LLM integration in the SE SME Agent system
 
 import asyncio
 from typing import Dict, Any
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from src.shared.llm import (
     create_llm_client,

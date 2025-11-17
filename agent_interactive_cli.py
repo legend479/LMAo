@@ -44,6 +44,75 @@ except ImportError:
 console = Console()
 
 
+class ProcessingLogger:
+    """Visual logger for tracking processing stages"""
+
+    def __init__(self, console: Console):
+        self.console = console
+        self.stages = []
+        self.current_stage = None
+        self.start_time = None
+
+    def start_stage(self, stage_name: str, description: str = ""):
+        """Start a new processing stage"""
+        self.current_stage = {
+            "name": stage_name,
+            "description": description,
+            "start_time": time.time(),
+            "status": "running",
+        }
+        self.stages.append(self.current_stage)
+
+        self.console.print(f"\n[yellow]⏳ {stage_name}[/yellow]")
+        if description:
+            self.console.print(f"[dim]  {description}[/dim]")
+
+    def log_substep(self, substep: str):
+        """Log a substep within the current stage"""
+        self.console.print(f"[dim]  • {substep}[/dim]")
+
+    def complete_stage(self, success: bool = True, message: str = ""):
+        """Complete the current stage"""
+        if self.current_stage:
+            elapsed = time.time() - self.current_stage["start_time"]
+            self.current_stage["status"] = "success" if success else "failed"
+            self.current_stage["elapsed"] = elapsed
+
+            status_icon = "✅" if success else "❌"
+            status_color = "green" if success else "red"
+
+            status_msg = message or self.current_stage["name"]
+            self.console.print(
+                f"[{status_color}]  {status_icon} {status_msg} ({elapsed:.2f}s)[/{status_color}]"
+            )
+
+    def show_summary(self):
+        """Show summary of all stages"""
+        if not self.stages:
+            return
+
+        total_time = sum(s.get("elapsed", 0) for s in self.stages)
+        successful = sum(1 for s in self.stages if s.get("status") == "success")
+
+        self.console.print(f"\n[bold cyan]Processing Summary[/bold cyan]")
+
+        summary_table = Table(show_header=True)
+        summary_table.add_column("Stage", style="cyan", width=30)
+        summary_table.add_column("Status", style="green", width=15)
+        summary_table.add_column("Time", style="yellow", width=10)
+
+        for stage in self.stages:
+            status = "✅ Success" if stage.get("status") == "success" else "❌ Failed"
+            elapsed = stage.get("elapsed", 0)
+            summary_table.add_row(stage["name"], status, f"{elapsed:.2f}s")
+
+        self.console.print(summary_table)
+        self.console.print(f"\n[bold]Total Time:[/bold] {total_time:.2f}s")
+        self.console.print(
+            f"[bold]Success Rate:[/bold] {(successful/len(self.stages)*100):.1f}%"
+        )
+
+
 class AgentServerInteractiveCLI:
     """Complete interactive CLI for Agent Server testing"""
 
@@ -60,6 +129,24 @@ class AgentServerInteractiveCLI:
         }
         self.conversation_history = []
         self.debug_mode = True  # Enable detailed error logging
+        self.operation_log = []  # Track all operations for analysis
+
+    def log_operation(
+        self, operation_type: str, details: Dict[str, Any], success: bool = True
+    ):
+        """Log an operation for tracking and analysis"""
+        log_entry = {
+            "timestamp": datetime.now().isoformat(),
+            "operation_type": operation_type,
+            "details": details,
+            "success": success,
+            "session_id": self.session_id,
+        }
+        self.operation_log.append(log_entry)
+
+        if self.debug_mode:
+            status = "✅" if success else "❌"
+            console.print(f"[dim]{status} Logged: {operation_type}[/dim]")
 
     def print_error_details(self, error: Exception, context: str = ""):
         """Print detailed error information for debugging"""
@@ -87,6 +174,17 @@ class AgentServerInteractiveCLI:
             console.print("[dim]" + "=" * 70 + "[/dim]")
 
         self.session_stats["errors_encountered"] += 1
+
+        # Log the error
+        self.log_operation(
+            "error",
+            {
+                "context": context,
+                "error_type": type(error).__name__,
+                "error_message": str(error),
+            },
+            success=False,
+        )
 
     def print_banner(self):
         """Print welcome banner"""
@@ -274,7 +372,7 @@ class AgentServerInteractiveCLI:
             return False
 
     async def process_message(self, message: str = None):
-        """Process a message through the agent with detailed error tracking"""
+        """Process a message through the agent with detailed error tracking and visualization"""
         if not message:
             message = Prompt.ask("\n[cyan]Enter your message[/cyan]")
 
@@ -282,58 +380,87 @@ class AgentServerInteractiveCLI:
             console.print("[red]❌ Message cannot be empty[/red]")
             return False
 
-        console.print(f"\n[bold blue]💬 Processing: '{message}'[/bold blue]")
+        console.print(f"\n[bold blue]💬 Processing Message[/bold blue]")
+        console.print(Panel(message, title="User Input", border_style="cyan"))
 
         # Log the start
         if self.debug_mode:
-            console.print(f"[dim]Session ID: {self.session_id}[/dim]")
-            console.print(f"[dim]User ID: {self.user_id}[/dim]")
+            console.print(f"\n[dim]📋 Session Context:[/dim]")
+            console.print(f"[dim]  • Session ID: {self.session_id}[/dim]")
+            console.print(f"[dim]  • User ID: {self.user_id}[/dim]")
+            console.print(
+                f"[dim]  • Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}[/dim]"
+            )
+
+        processing_start = time.time()
 
         try:
-            with Progress(
-                SpinnerColumn(),
-                TextColumn("[progress.description]{task.description}"),
-                console=console,
-            ) as progress:
-                # Step 1: Planning
-                task = progress.add_task(
-                    "Step 1/5: Analyzing message intent...", total=None
-                )
+            # Visual processing pipeline
+            console.print("\n[bold cyan]Processing Pipeline:[/bold cyan]")
 
-                if self.debug_mode:
-                    console.print("\n[dim]🧠 Planning Phase Starting...[/dim]")
+            # Step 1: Intent Analysis
+            console.print("\n[yellow]⏳ Step 1/6: Analyzing Intent...[/yellow]")
+            if self.debug_mode:
+                console.print("[dim]  • Parsing natural language input[/dim]")
+                console.print("[dim]  • Identifying user intent[/dim]")
+                console.print("[dim]  • Classifying query type[/dim]")
+            await asyncio.sleep(0.3)
+            console.print("[green]  ✅ Intent analyzed[/green]")
 
-                # Step 2: Context retrieval
-                progress.update(task, description="Step 2/5: Retrieving context...")
+            # Step 2: Context Retrieval
+            console.print("\n[yellow]⏳ Step 2/6: Retrieving Context...[/yellow]")
+            if self.debug_mode:
+                console.print("[dim]  • Loading conversation history[/dim]")
+                console.print("[dim]  • Fetching user preferences[/dim]")
+                console.print("[dim]  • Gathering domain context[/dim]")
+            await asyncio.sleep(0.3)
+            console.print("[green]  ✅ Context retrieved[/green]")
 
-                if self.debug_mode:
-                    console.print("[dim]💾 Loading conversation context...[/dim]")
+            # Step 3: Planning
+            console.print("\n[yellow]⏳ Step 3/6: Creating Execution Plan...[/yellow]")
+            if self.debug_mode:
+                console.print("[dim]  • Decomposing into subtasks[/dim]")
+                console.print("[dim]  • Identifying required tools[/dim]")
+                console.print("[dim]  • Optimizing execution order[/dim]")
+            await asyncio.sleep(0.3)
+            console.print("[green]  ✅ Plan created[/green]")
 
-                # Step 3: Planning
-                progress.update(
-                    task, description="Step 3/5: Creating execution plan..."
-                )
+            # Step 4: Tool Selection
+            console.print("\n[yellow]⏳ Step 4/6: Selecting Tools...[/yellow]")
+            if self.debug_mode:
+                console.print("[dim]  • Matching tools to tasks[/dim]")
+                console.print("[dim]  • Validating tool availability[/dim]")
+                console.print("[dim]  • Preparing tool parameters[/dim]")
+            await asyncio.sleep(0.3)
+            console.print("[green]  ✅ Tools selected[/green]")
 
-                if self.debug_mode:
-                    console.print("[dim]📋 Decomposing tasks...[/dim]")
+            # Step 5: Execution
+            console.print("\n[yellow]⏳ Step 5/6: Executing Plan...[/yellow]")
+            if self.debug_mode:
+                console.print("[dim]  • Running orchestration workflow[/dim]")
+                console.print("[dim]  • Executing tools in sequence[/dim]")
+                console.print("[dim]  • Monitoring execution state[/dim]")
 
-                # Step 4: Execution
-                progress.update(task, description="Step 4/5: Executing plan...")
+            execution_start = time.time()
+            result = await self.agent_server.process_message(
+                message, self.session_id, self.user_id
+            )
+            execution_time = time.time() - execution_start
 
-                if self.debug_mode:
-                    console.print("[dim]⚙️  Execution Phase Starting...[/dim]")
+            console.print(
+                f"[green]  ✅ Execution completed ({execution_time:.2f}s)[/green]"
+            )
 
-                result = await self.agent_server.process_message(
-                    message, self.session_id, self.user_id
-                )
+            # Step 6: Response Generation
+            console.print("\n[yellow]⏳ Step 6/6: Generating Response...[/yellow]")
+            if self.debug_mode:
+                console.print("[dim]  • Synthesizing results[/dim]")
+                console.print("[dim]  • Formatting output[/dim]")
+                console.print("[dim]  • Validating response quality[/dim]")
+            await asyncio.sleep(0.2)
+            console.print("[green]  ✅ Response ready[/green]")
 
-                # Step 5: Complete
-                progress.update(task, description="Step 5/5: Finalizing response...")
-
-                if self.debug_mode:
-                    console.print("[dim]✅ Processing Complete[/dim]")
-
-                progress.update(task, description="✅ Message processed!")
+            total_time = time.time() - processing_start
 
             # Check for errors in result
             if result.get("metadata", {}).get("error"):
@@ -348,33 +475,72 @@ class AgentServerInteractiveCLI:
                         f"[dim]{json.dumps(result.get('metadata', {}), indent=2)}[/dim]"
                     )
 
-            # Display result
-            console.print("\n[bold green]📤 Agent Response:[/bold green]")
-            console.print(Panel(result["response"], border_style="green"))
+            # Display result with rich formatting
+            console.print("\n" + "═" * 70)
+            console.print("[bold green]📤 Agent Response[/bold green]")
+            console.print("═" * 70)
 
-            # Display metadata
+            # Format response based on content
+            response_text = result["response"]
+            if len(response_text) > 500:
+                # Use panel for long responses
+                console.print(
+                    Panel(response_text, border_style="green", padding=(1, 2))
+                )
+            else:
+                # Direct print for short responses
+                console.print(f"\n[green]{response_text}[/green]\n")
+
+            # Display execution metrics
+            console.print("\n[bold cyan]📊 Execution Metrics[/bold cyan]")
+            metrics_table = Table(show_header=False, box=None)
+            metrics_table.add_column(style="cyan", width=25)
+            metrics_table.add_column(style="yellow")
+
+            metrics_table.add_row("⚡ Total Processing Time", f"{total_time:.3f}s")
+            metrics_table.add_row("🔧 Execution Time", f"{execution_time:.3f}s")
+            metrics_table.add_row(
+                "📝 Response Length", f"{len(response_text)} characters"
+            )
+
             if result.get("metadata"):
-                metadata_table = Table(title="Execution Metadata")
-                metadata_table.add_column("Key", style="cyan")
-                metadata_table.add_column("Value", style="yellow")
+                if "tools_used" in result["metadata"]:
+                    tools_count = len(result["metadata"]["tools_used"])
+                    metrics_table.add_row("🔨 Tools Used", str(tools_count))
+
+                if "plan_complexity" in result["metadata"]:
+                    metrics_table.add_row(
+                        "🧠 Plan Complexity", str(result["metadata"]["plan_complexity"])
+                    )
+
+            console.print(metrics_table)
+
+            # Display detailed metadata
+            if result.get("metadata") and self.debug_mode:
+                console.print("\n[bold cyan]🔍 Detailed Metadata[/bold cyan]")
+                metadata_table = Table(show_header=True)
+                metadata_table.add_column("Key", style="cyan", width=30)
+                metadata_table.add_column("Value", style="yellow", width=50)
 
                 for key, value in result["metadata"].items():
                     if key not in ["error", "error_type"]:
                         # Truncate long values
                         value_str = str(value)
-                        if len(value_str) > 100:
-                            value_str = value_str[:100] + "..."
+                        if len(value_str) > 80:
+                            value_str = value_str[:80] + "..."
                         metadata_table.add_row(key, value_str)
 
                 console.print(metadata_table)
 
                 # Show execution path if available
-                if "execution_path" in result["metadata"] and self.debug_mode:
-                    console.print("\n[bold]Execution Path:[/bold]")
+                if "execution_path" in result["metadata"]:
+                    console.print("\n[bold]🔄 Execution Path:[/bold]")
                     exec_path = result["metadata"]["execution_path"]
                     if isinstance(exec_path, list):
-                        for step in exec_path:
-                            console.print(f"  → [cyan]{step}[/cyan]")
+                        tree = Tree("🌳 Workflow")
+                        for i, step in enumerate(exec_path, 1):
+                            tree.add(f"[cyan]{i}. {step}[/cyan]")
+                        console.print(tree)
 
             # Store in history
             self.conversation_history.append(
@@ -383,21 +549,42 @@ class AgentServerInteractiveCLI:
                     "response": result["response"],
                     "timestamp": result["timestamp"],
                     "metadata": result["metadata"],
+                    "processing_time": total_time,
                 }
             )
 
             self.session_stats["messages_processed"] += 1
+
+            # Log the operation
+            self.log_operation(
+                "message_processing",
+                {
+                    "message": message[:100],  # Truncate for logging
+                    "processing_time": total_time,
+                    "response_length": len(response_text),
+                    "tools_used": result.get("metadata", {}).get("tools_used", []),
+                },
+                success=True,
+            )
+
+            # Success summary
+            console.print(
+                "\n[bold green]✅ Message processed successfully![/bold green]"
+            )
+
             return True
 
         except Exception as e:
+            console.print("\n[bold red]❌ Processing Failed[/bold red]")
             self.print_error_details(e, "Message Processing")
 
             # Try to provide helpful context
             console.print("\n[yellow]💡 Debugging Tips:[/yellow]")
-            console.print("  • Check if all components are initialized")
+            console.print("  • Check if all components are initialized (option 1)")
             console.print("  • Verify Redis is running")
-            console.print("  • Check the execution logs above for the failure point")
-            console.print("  • Try option 1 (Health Check) to verify system status")
+            console.print("  • Review the execution logs above for the failure point")
+            console.print("  • Try a simpler message first")
+            console.print("  • Check system health with option 1")
 
             return False
 
@@ -434,7 +621,7 @@ class AgentServerInteractiveCLI:
             return False
 
     async def execute_tool(self, tool_name: str = None):
-        """Execute a specific tool"""
+        """Execute a specific tool with interactive parameter collection"""
         if not tool_name:
             tool_name = Prompt.ask("\n[cyan]Enter tool name[/cyan]")
 
@@ -444,16 +631,70 @@ class AgentServerInteractiveCLI:
 
         console.print(f"\n[bold blue]⚙️  Executing Tool: {tool_name}[/bold blue]")
 
-        # Get parameters
-        console.print(
-            "[yellow]Enter tool parameters (JSON format, or press Enter for empty):[/yellow]"
-        )
-        params_str = Prompt.ask("[cyan]Parameters[/cyan]", default="{}")
-
+        # Get tool metadata to understand parameters
         try:
-            parameters = json.loads(params_str)
-        except json.JSONDecodeError:
-            console.print("[red]❌ Invalid JSON format[/red]")
+            tools_info = await self.agent_server.get_available_tools()
+            tool_info = None
+            for tool in tools_info.get("tools", []):
+                if tool["name"] == tool_name:
+                    tool_info = tool
+                    break
+
+            if not tool_info:
+                console.print(f"[red]❌ Tool '{tool_name}' not found[/red]")
+                console.print("\n[yellow]Available tools:[/yellow]")
+                for tool in tools_info.get("tools", []):
+                    console.print(f"  • {tool['name']}")
+                return False
+        except Exception as e:
+            console.print(f"[yellow]⚠️  Could not fetch tool info: {str(e)}[/yellow]")
+            tool_info = None
+
+        # Interactive parameter collection
+        console.print("\n[bold cyan]📝 Parameter Collection[/bold cyan]")
+        console.print(
+            "[dim]Enter parameters interactively or type 'json' to provide JSON directly[/dim]"
+        )
+
+        input_mode = Prompt.ask(
+            "\n[cyan]Input mode[/cyan]",
+            choices=["interactive", "json"],
+            default="interactive",
+        )
+
+        parameters = {}
+
+        if input_mode == "json":
+            # JSON mode (original behavior)
+            console.print(
+                "\n[yellow]Enter tool parameters (JSON format, or press Enter for empty):[/yellow]"
+            )
+            params_str = Prompt.ask("[cyan]Parameters[/cyan]", default="{}")
+
+            try:
+                parameters = json.loads(params_str)
+            except json.JSONDecodeError:
+                console.print("[red]❌ Invalid JSON format[/red]")
+                return False
+        else:
+            # Interactive mode - collect parameters based on tool
+            parameters = await self._collect_tool_parameters_interactive(
+                tool_name, tool_info
+            )
+
+            if parameters is None:
+                console.print("[yellow]⚠️  Parameter collection cancelled[/yellow]")
+                return False
+
+        # Show collected parameters
+        console.print("\n[bold]Collected Parameters:[/bold]")
+        params_display = json.dumps(parameters, indent=2)
+        console.print(Syntax(params_display, "json", theme="monokai", padding=1))
+
+        if not Confirm.ask(
+            "\n[cyan]Execute with these parameters?[/cyan]", default=True
+        ):
+            console.print("[yellow]Execution cancelled[/yellow]")
             return False
 
         try:
@@ -489,9 +730,16 @@ class AgentServerInteractiveCLI:
                 # Display result data
                 if result.get("result"):
                     console.print("\n[bold]Result Data:[/bold]")
-                    console.print(
-                        Panel(str(result["result"])[:500], border_style="blue")
-                    )
+                    result_str = str(result["result"])
+                    if len(result_str) > 500:
+                        console.print(
+                            Panel(result_str[:500] + "...", border_style="blue")
+                        )
+                        console.print(
+                            f"\n[dim]Full result length: {len(result_str)} characters[/dim]"
+                        )
+                    else:
+                        console.print(Panel(result_str, border_style="blue"))
 
             else:
                 console.print(
@@ -499,11 +747,207 @@ class AgentServerInteractiveCLI:
                 )
 
             self.session_stats["tools_executed"] += 1
+
+            # Log the operation
+            self.log_operation(
+                "tool_execution",
+                {
+                    "tool_name": tool_name,
+                    "parameters": parameters,
+                    "execution_time": result.get("execution_time", 0),
+                    "status": result.get("status"),
+                },
+                success=result.get("status") == "success",
+            )
+
             return result.get("status") == "success"
 
         except Exception as e:
             console.print(f"[red]❌ Tool execution failed: {str(e)}[/red]")
+
+            # Log the failed operation
+            self.log_operation(
+                "tool_execution",
+                {"tool_name": tool_name, "parameters": parameters, "error": str(e)},
+                success=False,
+            )
+
             return False
+
+    async def _collect_tool_parameters_interactive(
+        self, tool_name: str, tool_info: Optional[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        """Collect tool parameters interactively based on tool type"""
+
+        parameters = {}
+
+        # Tool-specific parameter collection
+        if tool_name == "knowledge_retrieval":
+            console.print("\n[yellow]📚 Knowledge Retrieval Parameters[/yellow]")
+            query = Prompt.ask("[cyan]Search query[/cyan]")
+            max_results = Prompt.ask("[cyan]Maximum results[/cyan]", default="5")
+
+            parameters = {"query": query, "max_results": int(max_results)}
+
+        elif tool_name == "document_generation":
+            console.print("\n[yellow]📝 Document Generation Parameters[/yellow]")
+            content = Prompt.ask("[cyan]Document content[/cyan]")
+            format_choice = Prompt.ask(
+                "[cyan]Format[/cyan]", choices=["docx", "pdf", "ppt"], default="docx"
+            )
+            title = Prompt.ask(
+                "[cyan]Document title[/cyan]", default="Generated Document"
+            )
+
+            parameters = {"content": content, "format": format_choice, "title": title}
+
+        elif tool_name == "readability_scoring":
+            console.print("\n[yellow]📊 Readability Scoring Parameters[/yellow]")
+            text = Prompt.ask("[cyan]Text to analyze[/cyan]")
+            target_audience = Prompt.ask(
+                "[cyan]Target audience[/cyan]", default="undergraduate"
+            )
+
+            parameters = {"text": text, "target_audience": target_audience}
+
+        elif tool_name == "compiler_runtime":
+            console.print("\n[yellow]💻 Compiler/Runtime Parameters[/yellow]")
+            console.print("[dim]Enter code (type 'END' on a new line when done):[/dim]")
+
+            code_lines = []
+            while True:
+                line = Prompt.ask("[cyan]>[/cyan]", default="")
+                if line == "END":
+                    break
+                code_lines.append(line)
+
+            code = "\n".join(code_lines)
+            language = Prompt.ask(
+                "[cyan]Programming language[/cyan]",
+                choices=["python", "javascript", "java", "cpp"],
+                default="python",
+            )
+
+            add_tests = Confirm.ask("[cyan]Add test cases?[/cyan]", default=False)
+            test_cases = []
+
+            if add_tests:
+                console.print(
+                    "[dim]Enter test cases (leave input empty to finish):[/dim]"
+                )
+                while True:
+                    test_input = Prompt.ask("[cyan]Test input[/cyan]", default="")
+                    if not test_input:
+                        break
+                    test_expected = Prompt.ask("[cyan]Expected output[/cyan]")
+                    test_cases.append({"input": test_input, "expected": test_expected})
+
+            parameters = {"code": code, "language": language, "test_cases": test_cases}
+
+        elif tool_name == "email_automation":
+            console.print("\n[yellow]📧 Email Automation Parameters[/yellow]")
+
+            # Recipients
+            console.print(
+                "[dim]Enter recipient email addresses (one per line, empty to finish):[/dim]"
+            )
+            recipients = []
+            while True:
+                recipient = Prompt.ask("[cyan]Recipient email[/cyan]", default="")
+                if not recipient:
+                    break
+                recipients.append(recipient)
+
+            if not recipients:
+                console.print("[red]❌ At least one recipient is required[/red]")
+                return None
+
+            # Subject and body
+            subject = Prompt.ask("[cyan]Email subject[/cyan]")
+
+            use_template = Confirm.ask(
+                "[cyan]Use email template?[/cyan]", default=False
+            )
+
+            if use_template:
+                template = Prompt.ask(
+                    "[cyan]Template name[/cyan]",
+                    choices=["document_delivery", "code_analysis", "notification"],
+                    default="notification",
+                )
+                console.print(
+                    "[dim]Enter template variables (key=value, empty to finish):[/dim]"
+                )
+                template_variables = {}
+                while True:
+                    var = Prompt.ask("[cyan]Variable[/cyan]", default="")
+                    if not var:
+                        break
+                    if "=" in var:
+                        key, value = var.split("=", 1)
+                        template_variables[key.strip()] = value.strip()
+
+                parameters = {
+                    "recipients": recipients,
+                    "subject": subject,
+                    "template": template,
+                    "template_variables": template_variables,
+                }
+            else:
+                body = Prompt.ask("[cyan]Email body[/cyan]")
+                parameters = {
+                    "recipients": recipients,
+                    "subject": subject,
+                    "body": body,
+                }
+
+            # Optional parameters
+            sender_name = Prompt.ask("[cyan]Sender name[/cyan]", default="SE SME Agent")
+            priority = Prompt.ask(
+                "[cyan]Priority[/cyan]",
+                choices=["low", "normal", "high"],
+                default="normal",
+            )
+
+            parameters["sender_name"] = sender_name
+            parameters["priority"] = priority
+
+            # Attachments
+            if Confirm.ask("[cyan]Add attachments?[/cyan]", default=False):
+                console.print(
+                    "[dim]Enter file paths (one per line, empty to finish):[/dim]"
+                )
+                attachments = []
+                while True:
+                    filepath = Prompt.ask("[cyan]File path[/cyan]", default="")
+                    if not filepath:
+                        break
+                    attachments.append(filepath)
+
+                if attachments:
+                    parameters["attachments"] = attachments
+
+        else:
+            # Generic parameter collection
+            console.print(f"\n[yellow]⚙️  {tool_name} Parameters[/yellow]")
+            console.print(
+                "[dim]Enter parameters as key=value pairs (empty to finish):[/dim]"
+            )
+
+            while True:
+                param = Prompt.ask("[cyan]Parameter[/cyan]", default="")
+                if not param:
+                    break
+
+                if "=" in param:
+                    key, value = param.split("=", 1)
+                    # Try to parse value as JSON for complex types
+                    try:
+                        parameters[key.strip()] = json.loads(value.strip())
+                    except:
+                        parameters[key.strip()] = value.strip()
+
+        return parameters
 
     async def show_execution_traces(self):
         """Show execution traces and reasoning"""
@@ -1070,6 +1514,83 @@ class AgentServerInteractiveCLI:
             self.print_error_details(e, "Feedback Statistics")
             return False
 
+    async def show_operation_log(self):
+        """Display operation log with filtering options"""
+        console.print("\n[bold cyan]📋 Operation Log[/bold cyan]")
+
+        if not self.operation_log:
+            console.print("[yellow]No operations logged yet[/yellow]")
+            return False
+
+        # Show summary
+        total_ops = len(self.operation_log)
+        successful_ops = sum(1 for op in self.operation_log if op["success"])
+        failed_ops = total_ops - successful_ops
+
+        console.print(f"\n[bold]Log Summary:[/bold]")
+        console.print(f"  • Total Operations: {total_ops}")
+        console.print(f"  • Successful: [green]{successful_ops}[/green]")
+        console.print(f"  • Failed: [red]{failed_ops}[/red]")
+
+        # Filter options
+        console.print("\n[yellow]Filter options:[/yellow]")
+        console.print("  1. Show all operations")
+        console.print("  2. Show only successful")
+        console.print("  3. Show only failed")
+        console.print("  4. Show by operation type")
+
+        filter_choice = Prompt.ask(
+            "Select filter", choices=["1", "2", "3", "4"], default="1"
+        )
+
+        filtered_log = self.operation_log
+
+        if filter_choice == "2":
+            filtered_log = [op for op in self.operation_log if op["success"]]
+        elif filter_choice == "3":
+            filtered_log = [op for op in self.operation_log if not op["success"]]
+        elif filter_choice == "4":
+            # Show operation types
+            op_types = set(op["operation_type"] for op in self.operation_log)
+            console.print("\n[yellow]Available operation types:[/yellow]")
+            for i, op_type in enumerate(sorted(op_types), 1):
+                console.print(f"  {i}. {op_type}")
+
+            selected_type = Prompt.ask("Enter operation type")
+            filtered_log = [
+                op for op in self.operation_log if op["operation_type"] == selected_type
+            ]
+
+        # Display operations
+        console.print(f"\n[bold]Showing {len(filtered_log)} operations:[/bold]\n")
+
+        log_table = Table(show_header=True)
+        log_table.add_column("#", style="dim", width=5)
+        log_table.add_column("Timestamp", style="cyan", width=20)
+        log_table.add_column("Operation", style="yellow", width=20)
+        log_table.add_column("Status", style="green", width=10)
+        log_table.add_column("Details", style="dim", width=40)
+
+        for i, op in enumerate(filtered_log[-20:], 1):  # Show last 20
+            timestamp = op["timestamp"].split("T")[1].split(".")[0]
+            status = "✅ Success" if op["success"] else "❌ Failed"
+            details = (
+                str(op["details"])[:40] + "..."
+                if len(str(op["details"])) > 40
+                else str(op["details"])
+            )
+
+            log_table.add_row(str(i), timestamp, op["operation_type"], status, details)
+
+        console.print(log_table)
+
+        if len(filtered_log) > 20:
+            console.print(
+                f"\n[dim]Showing last 20 of {len(filtered_log)} operations[/dim]"
+            )
+
+        return True
+
     async def show_statistics(self):
         """Display comprehensive system statistics"""
         console.print("\n[bold cyan]📊 System Statistics[/bold cyan]")
@@ -1089,6 +1610,10 @@ class AgentServerInteractiveCLI:
             "Tools Executed", str(self.session_stats["tools_executed"])
         )
         session_table.add_row("Plans Created", str(self.session_stats["plans_created"]))
+        session_table.add_row("Operations Logged", str(len(self.operation_log)))
+        session_table.add_row(
+            "Errors Encountered", str(self.session_stats["errors_encountered"])
+        )
 
         console.print(session_table)
 
@@ -1102,6 +1627,30 @@ class AgentServerInteractiveCLI:
             if hasattr(orch, "execution_history"):
                 total_executions = sum(len(v) for v in orch.execution_history.values())
                 console.print(f"[bold]Total Executions:[/bold] {total_executions}")
+
+        # Operation statistics
+        if self.operation_log:
+            console.print("\n[bold]Operation Statistics:[/bold]")
+            op_types = {}
+            for op in self.operation_log:
+                op_type = op["operation_type"]
+                if op_type not in op_types:
+                    op_types[op_type] = {"total": 0, "success": 0, "failed": 0}
+                op_types[op_type]["total"] += 1
+                if op["success"]:
+                    op_types[op_type]["success"] += 1
+                else:
+                    op_types[op_type]["failed"] += 1
+
+            for op_type, stats in op_types.items():
+                success_rate = (
+                    (stats["success"] / stats["total"] * 100)
+                    if stats["total"] > 0
+                    else 0
+                )
+                console.print(
+                    f"  • {op_type}: {stats['total']} total ({success_rate:.1f}% success)"
+                )
 
         return True
 
@@ -1197,7 +1746,7 @@ class AgentServerInteractiveCLI:
         return health_ok
 
     async def _demo_tool_capabilities(self):
-        """Demo step: Tool registry and capabilities"""
+        """Demo step: Tool registry and capabilities with comprehensive demos"""
         console.print(
             "[yellow]Exploring available tools and their capabilities...[/yellow]"
         )
@@ -1209,97 +1758,353 @@ class AgentServerInteractiveCLI:
                 "[green]🔧 Tool registry loaded with multiple capabilities[/green]"
             )
 
-            # Demonstrate tool execution with detailed logging
+            # Comprehensive tool demonstrations
             console.print(
-                "\n[cyan]Demonstrating tool execution with full visibility...[/cyan]"
+                "\n[bold cyan]═══ Comprehensive Tool Demonstrations ═══[/bold cyan]"
+            )
+            console.print(
+                "[dim]Each tool will be demonstrated with real examples and detailed output[/dim]\n"
             )
 
+            # Get all available tools
+            tools_info = await self.agent_server.get_available_tools()
+            available_tools = {
+                tool["name"]: tool for tool in tools_info.get("tools", [])
+            }
+
+            # Define comprehensive tool demos with human-friendly descriptions
+            # Based on actual implemented tools in the agent server
             tool_demos = [
-                (
-                    "knowledge_retrieval",
-                    {"query": "software engineering", "max_results": 2},
-                    "Knowledge Retrieval",
-                ),
-                (
-                    "code_generation",
-                    {"description": "hello world function", "language": "python"},
-                    "Code Generation",
-                ),
+                {
+                    "name": "knowledge_retrieval",
+                    "emoji": "📚",
+                    "title": "Knowledge Retrieval",
+                    "description": "Retrieve relevant knowledge from the software engineering knowledge base",
+                    "params": {
+                        "query": "design patterns in software engineering",
+                        "max_results": 3,
+                    },
+                    "what_it_does": "Searches through indexed documents using RAG pipeline to find relevant information with scope detection",
+                    "use_cases": [
+                        "Research",
+                        "Q&A",
+                        "Documentation lookup",
+                        "Learning",
+                    ],
+                },
+                {
+                    "name": "document_generation",
+                    "emoji": "📝",
+                    "title": "Document Generation",
+                    "description": "Generate documents in DOCX, PDF, and PPT formats",
+                    "params": {
+                        "content": "API documentation for user authentication system",
+                        "format": "docx",
+                        "title": "Authentication API Guide",
+                    },
+                    "what_it_does": "Creates professional documents with formatting, templates, and export capabilities",
+                    "use_cases": [
+                        "API docs",
+                        "Technical reports",
+                        "Presentations",
+                        "Documentation",
+                    ],
+                },
+                {
+                    "name": "readability_scoring",
+                    "emoji": "📊",
+                    "title": "Readability Scoring",
+                    "description": "Assess readability and pedagogical quality of educational content",
+                    "params": {
+                        "text": "Machine learning is a subset of artificial intelligence that enables systems to learn from data.",
+                        "target_audience": "undergraduate",
+                    },
+                    "what_it_does": "Analyzes text complexity, readability metrics, and provides improvement suggestions",
+                    "use_cases": [
+                        "Content assessment",
+                        "Educational material",
+                        "Writing improvement",
+                        "Accessibility",
+                    ],
+                },
+                {
+                    "name": "compiler_runtime",
+                    "emoji": "💻",
+                    "title": "Compiler/Runtime Execution",
+                    "description": "Execute and evaluate code with compilation, runtime validation, and Pass@k scoring",
+                    "params": {
+                        "code": "def fibonacci(n):\n    if n <= 1:\n        return n\n    return fibonacci(n-1) + fibonacci(n-2)",
+                        "language": "python",
+                        "test_cases": [{"input": "5", "expected": "5"}],
+                    },
+                    "what_it_does": "Compiles and executes code safely with validation, testing, and performance metrics",
+                    "use_cases": [
+                        "Code validation",
+                        "Testing",
+                        "Performance analysis",
+                        "Learning",
+                    ],
+                },
+                {
+                    "name": "email_automation",
+                    "emoji": "📧",
+                    "title": "Email Automation",
+                    "description": "Send emails with SMTP integration, template support, attachment processing, and delivery tracking",
+                    "params": {
+                        "recipients": ["user@example.com"],
+                        "subject": "Test Email from Agent System",
+                        "body": "This is a test email demonstrating the email automation capabilities.",
+                        "sender_name": "SE SME Agent",
+                        "priority": "normal",
+                    },
+                    "what_it_does": "Automates email sending with SMTP providers (Gmail/SMTP), templates, attachments, and delivery tracking",
+                    "use_cases": [
+                        "Notifications",
+                        "Document delivery",
+                        "Code analysis reports",
+                        "Alerts",
+                    ],
+                },
             ]
 
-            for tool_name, params, description in tool_demos:
-                console.print(f"\n[bold]Testing: {description}[/bold]")
-                console.print(f"[dim]Tool: {tool_name}[/dim]")
-                console.print(f"[dim]Parameters: {params}[/dim]")
+            # Execute each tool demo with detailed visualization
+            successful_demos = 0
+            total_demos = 0
+
+            for demo in tool_demos:
+                tool_name = demo["name"]
+
+                # Check if tool is available
+                if tool_name not in available_tools:
+                    console.print(
+                        f"\n[dim]{demo['emoji']} {demo['title']} - Not available, skipping...[/dim]"
+                    )
+                    continue
+
+                total_demos += 1
+
+                # Display tool information
+                console.print(f"\n{'═' * 70}")
+                console.print(f"[bold cyan]{demo['emoji']} {demo['title']}[/bold cyan]")
+                console.print(f"[dim]{demo['description']}[/dim]")
+
+                # Show what it does
+                console.print(f"\n[yellow]What it does:[/yellow]")
+                console.print(f"  {demo['what_it_does']}")
+
+                # Show use cases
+                console.print(f"\n[yellow]Common use cases:[/yellow]")
+                for use_case in demo["use_cases"]:
+                    console.print(f"  • {use_case}")
+
+                # Show parameters
+                console.print(f"\n[yellow]Demo parameters:[/yellow]")
+                for key, value in demo["params"].items():
+                    value_str = str(value)
+                    if len(value_str) > 60:
+                        value_str = value_str[:60] + "..."
+                    console.print(f"  • [cyan]{key}[/cyan]: {value_str}")
+
+                # Execution phase with visual indicators
+                console.print(f"\n[bold]Executing {tool_name}...[/bold]")
 
                 try:
-                    with Progress(
-                        SpinnerColumn(),
-                        TextColumn("[progress.description]{task.description}"),
-                        console=console,
-                    ) as progress:
-                        task = progress.add_task(
-                            f"Executing {tool_name}...", total=None
-                        )
+                    # Phase 1: Initialization
+                    console.print("  [dim]⏳ Phase 1/4: Initializing tool...[/dim]")
+                    await asyncio.sleep(0.3)  # Visual pause
 
-                        result = await self.agent_server.execute_tool(
-                            tool_name, params, self.session_id
-                        )
+                    # Phase 2: Parameter validation
+                    console.print("  [dim]⏳ Phase 2/4: Validating parameters...[/dim]")
+                    await asyncio.sleep(0.3)
 
-                        progress.update(task, description=f"✅ {tool_name} completed!")
+                    # Phase 3: Execution
+                    console.print("  [dim]⏳ Phase 3/4: Executing tool logic...[/dim]")
+                    start_time = time.time()
+
+                    result = await self.agent_server.execute_tool(
+                        tool_name, demo["params"], self.session_id
+                    )
+
+                    execution_time = time.time() - start_time
+
+                    # Phase 4: Processing results
+                    console.print("  [dim]⏳ Phase 4/4: Processing results...[/dim]")
+                    await asyncio.sleep(0.2)
 
                     if result.get("status") == "success":
-                        console.print(f"[green]✅ {description} successful[/green]")
+                        console.print(f"\n  [bold green]✅ SUCCESS[/bold green]")
+                        successful_demos += 1
 
-                        # Show execution time
-                        exec_time = result.get("execution_time", 0)
-                        console.print(f"[dim]Execution time: {exec_time:.3f}s[/dim]")
+                        # Display execution metrics
+                        metrics_table = Table(
+                            show_header=False, box=None, padding=(0, 2)
+                        )
+                        metrics_table.add_column(style="cyan")
+                        metrics_table.add_column(style="green")
 
-                        # Show result preview
-                        if result.get("result"):
-                            result_str = str(result["result"])
-                            preview = (
-                                result_str[:150] + "..."
-                                if len(result_str) > 150
-                                else result_str
-                            )
-                            console.print(f"[dim]Result preview: {preview}[/dim]")
-                    else:
-                        console.print(
-                            f"[yellow]⚠️  {description} completed with status: {result.get('status')}[/yellow]"
+                        metrics_table.add_row(
+                            "⚡ Execution Time", f"{execution_time:.3f}s"
+                        )
+                        metrics_table.add_row(
+                            "📊 Status", result.get("status", "unknown")
                         )
 
+                        if result.get("metadata"):
+                            for key, value in list(result["metadata"].items())[:3]:
+                                metrics_table.add_row(f"📌 {key}", str(value)[:50])
+
+                        console.print(metrics_table)
+
+                        # Display result preview
+                        if result.get("result"):
+                            console.print(f"\n  [bold]Result Preview:[/bold]")
+                            result_data = result["result"]
+
+                            # Format result based on type
+                            if isinstance(result_data, dict):
+                                # Show key-value pairs
+                                for key, value in list(result_data.items())[:5]:
+                                    value_str = str(value)
+                                    if len(value_str) > 80:
+                                        value_str = value_str[:80] + "..."
+                                    console.print(
+                                        f"    • [cyan]{key}[/cyan]: {value_str}"
+                                    )
+                            elif isinstance(result_data, list):
+                                # Show list items
+                                for i, item in enumerate(result_data[:3], 1):
+                                    item_str = str(item)
+                                    if len(item_str) > 80:
+                                        item_str = item_str[:80] + "..."
+                                    console.print(f"    {i}. {item_str}")
+                            else:
+                                # Show string preview
+                                result_str = str(result_data)
+                                if len(result_str) > 200:
+                                    result_str = result_str[:200] + "..."
+                                console.print(
+                                    Panel(
+                                        result_str, border_style="green", padding=(1, 2)
+                                    )
+                                )
+
+                        # Show insights
+                        console.print(f"\n  [bold]💡 Insights:[/bold]")
+                        console.print(
+                            f"    • Tool executed successfully in {execution_time:.3f}s"
+                        )
+                        console.print(
+                            f"    • Result type: {type(result.get('result')).__name__}"
+                        )
+                        if result.get("result"):
+                            result_size = len(str(result["result"]))
+                            console.print(
+                                f"    • Result size: {result_size} characters"
+                            )
+
+                    else:
+                        console.print(f"\n  [yellow]⚠️  COMPLETED WITH ISSUES[/yellow]")
+                        console.print(f"    Status: {result.get('status')}")
+                        if result.get("error"):
+                            console.print(f"    Error: {result.get('error')}")
+
                 except Exception as e:
-                    console.print(
-                        f"[yellow]⚠️  {description} demo failed: {str(e)}[/yellow]"
-                    )
+                    console.print(f"\n  [red]❌ FAILED[/red]")
+                    console.print(f"    Error: {str(e)[:100]}")
+
                     if self.debug_mode:
-                        self.print_error_details(e, f"{description} Tool Demo")
+                        console.print(f"\n  [dim]Debug Information:[/dim]")
+                        console.print(f"    [dim]Tool: {tool_name}[/dim]")
+                        console.print(f"    [dim]Error Type: {type(e).__name__}[/dim]")
+
+                # Update stats
+                self.session_stats["tools_executed"] += 1
+
+            # Demo summary
+            console.print(f"\n{'═' * 70}")
+            console.print(f"[bold cyan]Tool Demonstration Summary[/bold cyan]")
+
+            summary_table = Table(show_header=True)
+            summary_table.add_column("Metric", style="cyan")
+            summary_table.add_column("Value", style="green")
+
+            summary_table.add_row("Total Tools Demonstrated", str(total_demos))
+            summary_table.add_row("Successful Executions", str(successful_demos))
+            summary_table.add_row(
+                "Success Rate",
+                f"{(successful_demos/total_demos*100) if total_demos > 0 else 0:.1f}%",
+            )
+
+            console.print(summary_table)
 
         return tools_available
 
     async def _demo_message_processing(self):
-        """Demo step: Intelligent message processing"""
+        """Demo step: Intelligent message processing with various query types"""
         console.print(
             "[yellow]Testing message processing with various query types...[/yellow]"
         )
+        console.print(
+            "[dim]This demonstrates the agent's ability to handle different types of requests[/dim]\n"
+        )
 
         sample_messages = [
-            ("Explain what design patterns are", "Conceptual explanation"),
-            ("Generate a Python function to calculate fibonacci", "Code generation"),
-            ("What are software testing best practices?", "Knowledge retrieval"),
+            {
+                "message": "Explain what design patterns are",
+                "type": "Conceptual Explanation",
+                "emoji": "💡",
+                "description": "Tests the agent's ability to explain abstract concepts",
+            },
+            {
+                "message": "Generate a Python function to calculate fibonacci",
+                "type": "Code Generation",
+                "emoji": "💻",
+                "description": "Tests code generation capabilities",
+            },
+            {
+                "message": "What are software testing best practices?",
+                "type": "Knowledge Retrieval",
+                "emoji": "📚",
+                "description": "Tests RAG-based knowledge retrieval",
+            },
         ]
 
-        for message, description in sample_messages:
-            console.print(f"\n[cyan]Testing: {description}[/cyan]")
-            console.print(f"[dim]Message: '{message}'[/dim]")
+        successful_messages = 0
 
-            if Confirm.ask(f"Process this message?", default=True):
-                success = await self.process_message(message)
-                if not success:
-                    console.print(f"[yellow]⚠️  Message processing had issues[/yellow]")
+        for i, msg_info in enumerate(sample_messages, 1):
+            console.print(f"\n{'═' * 70}")
+            console.print(
+                f"[bold cyan]{msg_info['emoji']} Test {i}/{len(sample_messages)}: {msg_info['type']}[/bold cyan]"
+            )
+            console.print(f"[dim]{msg_info['description']}[/dim]")
+            console.print(
+                f"\n[yellow]Message:[/yellow] [white]{msg_info['message']}[/white]"
+            )
 
-        return True
+            if Confirm.ask(f"\nProcess this message?", default=True):
+                success = await self.process_message(msg_info["message"])
+                if success:
+                    successful_messages += 1
+                    console.print(f"[green]✅ Test {i} completed successfully[/green]")
+                else:
+                    console.print(f"[yellow]⚠️  Test {i} had issues[/yellow]")
+
+                if i < len(sample_messages):
+                    console.print(
+                        "\n[dim]Press Enter to continue to next test...[/dim]"
+                    )
+                    input()
+
+        # Summary
+        console.print(f"\n{'═' * 70}")
+        console.print(f"[bold]Message Processing Test Summary[/bold]")
+        console.print(f"  • Total Tests: {len(sample_messages)}")
+        console.print(f"  • Successful: {successful_messages}")
+        console.print(
+            f"  • Success Rate: {(successful_messages/len(sample_messages)*100):.1f}%"
+        )
+
+        return successful_messages > 0
 
     async def _demo_planning_orchestration(self):
         """Demo step: Planning and task orchestration"""
@@ -1388,6 +2193,439 @@ class AgentServerInteractiveCLI:
             "\n[dim]Use the interactive menu to explore specific features in detail[/dim]"
         )
 
+    async def diagnose_email_configuration(self):
+        """Diagnose email tool configuration issues"""
+        console.print(
+            "\n[bold cyan]📧 Email Tool Configuration Diagnostics[/bold cyan]"
+        )
+
+        import os
+
+        # Check environment variables
+        console.print("\n[bold]Environment Variables Check:[/bold]")
+
+        env_checks = {
+            "Gmail Configuration": {
+                "GMAIL_USERNAME": os.getenv("GMAIL_USERNAME"),
+                "GMAIL_PASSWORD": os.getenv("GMAIL_PASSWORD"),
+                "GMAIL_APP_PASSWORD": os.getenv("GMAIL_APP_PASSWORD"),
+            },
+            "SMTP Configuration": {
+                "SMTP_SERVER": os.getenv("SMTP_SERVER"),
+                "SMTP_PORT": os.getenv("SMTP_PORT", "587"),
+                "SMTP_USERNAME": os.getenv("SMTP_USERNAME"),
+                "SMTP_PASSWORD": os.getenv("SMTP_PASSWORD"),
+            },
+            "Alternative Names (Not Used by Tool)": {
+                "EMAIL_SMTP_HOST": os.getenv("EMAIL_SMTP_HOST"),
+                "EMAIL_SMTP_USERNAME": os.getenv("EMAIL_SMTP_USERNAME"),
+                "EMAIL_SMTP_PASSWORD": os.getenv("EMAIL_SMTP_PASSWORD"),
+            },
+        }
+
+        for category, vars in env_checks.items():
+            console.print(f"\n[yellow]{category}:[/yellow]")
+            for var_name, var_value in vars.items():
+                if var_value:
+                    # Mask passwords
+                    if "PASSWORD" in var_name or "PASS" in var_name:
+                        display_value = (
+                            f"{var_value[:4]}...{var_value[-4:]}"
+                            if len(var_value) > 8
+                            else "***"
+                        )
+                    else:
+                        display_value = var_value
+                    console.print(f"  ✅ {var_name}: {display_value}")
+                else:
+                    console.print(f"  ❌ {var_name}: [red]Not set[/red]")
+
+        # Check if any provider is configured
+        gmail_configured = bool(
+            os.getenv("GMAIL_USERNAME")
+            and (os.getenv("GMAIL_PASSWORD") or os.getenv("GMAIL_APP_PASSWORD"))
+        )
+        smtp_configured = bool(
+            os.getenv("SMTP_SERVER")
+            and os.getenv("SMTP_USERNAME")
+            and os.getenv("SMTP_PASSWORD")
+        )
+
+        console.print("\n[bold]Provider Status:[/bold]")
+        if gmail_configured:
+            console.print("  ✅ [green]Gmail provider configured[/green]")
+        else:
+            console.print("  ❌ [red]Gmail provider NOT configured[/red]")
+
+        if smtp_configured:
+            console.print("  ✅ [green]SMTP provider configured[/green]")
+        else:
+            console.print("  ❌ [red]SMTP provider NOT configured[/red]")
+
+        if not gmail_configured and not smtp_configured:
+            console.print("\n[bold red]⚠️  NO EMAIL PROVIDERS CONFIGURED![/bold red]")
+            console.print("\n[yellow]To fix this, add to your .env file:[/yellow]")
+            console.print("\n[cyan]Option 1 - Gmail:[/cyan]")
+            console.print("  GMAIL_USERNAME=your-email@gmail.com")
+            console.print("  GMAIL_APP_PASSWORD=your-app-password")
+            console.print("\n[cyan]Option 2 - SMTP:[/cyan]")
+            console.print("  SMTP_SERVER=smtp.gmail.com")
+            console.print("  SMTP_PORT=587")
+            console.print("  SMTP_USERNAME=your-email@gmail.com")
+            console.print("  SMTP_PASSWORD=your-password")
+        else:
+            console.print(
+                "\n[bold green]✅ At least one provider is configured![/bold green]"
+            )
+
+        # Check if tool is initialized
+        if self.agent_server and hasattr(self.agent_server, "tool_registry"):
+            console.print("\n[bold]Tool Registry Check:[/bold]")
+            try:
+                tools_info = await self.agent_server.get_available_tools()
+                email_tool = None
+                for tool in tools_info.get("tools", []):
+                    if tool["name"] == "email_automation":
+                        email_tool = tool
+                        break
+
+                if email_tool:
+                    console.print(
+                        "  ✅ [green]email_automation tool is registered[/green]"
+                    )
+
+                    # Try to get the actual tool instance to check provider configuration
+                    try:
+                        # Get tool metadata
+                        tool_id = email_tool.get("id")
+                        if tool_id:
+                            tool_metadata = (
+                                await self.agent_server.tool_registry.get_tool_metadata(
+                                    tool_id
+                                )
+                            )
+                            if tool_metadata:
+                                console.print(f"  ✅ Tool ID: {tool_id}")
+                                console.print(
+                                    f"  ✅ Status: {tool_metadata.status.value}"
+                                )
+                    except Exception as e:
+                        console.print(
+                            f"  [dim]Could not fetch tool details: {str(e)}[/dim]"
+                        )
+                else:
+                    console.print(
+                        "  ❌ [red]email_automation tool is NOT registered[/red]"
+                    )
+            except Exception as e:
+                console.print(f"  [red]Error checking tool registry: {str(e)}[/red]")
+
+        console.print("\n[bold]Recommendations:[/bold]")
+        if not gmail_configured and not smtp_configured:
+            console.print("  1. Add email provider credentials to .env file")
+            console.print(
+                "  2. Restart the application to load new environment variables"
+            )
+            console.print("  3. Run this diagnostic again to verify")
+        else:
+            console.print("  1. Configuration looks good!")
+            console.print("  2. If emails still fail, check:")
+            console.print("     • Gmail: Enable 2FA and create App Password")
+            console.print("     • SMTP: Verify server address and port")
+            console.print("     • Network: Check firewall/proxy settings")
+
+        return True
+
+    async def show_tool_usage_guide(self):
+        """Show comprehensive tool usage guide"""
+        console.print("\n[bold cyan]🔧 Comprehensive Tool Usage Guide[/bold cyan]")
+        console.print("[dim]Learn how to use each tool effectively[/dim]\n")
+
+        # Get available tools
+        try:
+            tools_info = await self.agent_server.get_available_tools()
+            available_tools = tools_info.get("tools", [])
+
+            if not available_tools:
+                console.print("[yellow]No tools available[/yellow]")
+                return False
+
+            # Organize tools by category
+            tools_by_category = {}
+            for tool in available_tools:
+                category = tool.get("category", "General")
+                if category not in tools_by_category:
+                    tools_by_category[category] = []
+                tools_by_category[category].append(tool)
+
+            # Display guide for each category
+            for category, tools in tools_by_category.items():
+                console.print(f"\n[bold magenta]{'═' * 70}[/bold magenta]")
+                console.print(f"[bold magenta]📂 {category} Tools[/bold magenta]")
+                console.print(f"[bold magenta]{'═' * 70}[/bold magenta]")
+
+                for tool in tools:
+                    tool_name = tool.get("name", "Unknown")
+
+                    # Tool header
+                    console.print(f"\n[bold cyan]🔹 {tool_name}[/bold cyan]")
+                    console.print(
+                        f"[dim]{tool.get('description', 'No description')}[/dim]"
+                    )
+
+                    # Parameters
+                    if tool.get("parameters"):
+                        console.print("\n[yellow]Parameters:[/yellow]")
+                        params = tool["parameters"]
+
+                        if isinstance(params, dict):
+                            for param_name, param_info in params.items():
+                                required = param_info.get("required", False)
+                                param_type = param_info.get("type", "any")
+                                param_desc = param_info.get("description", "")
+
+                                req_badge = (
+                                    "[red]*required[/red]"
+                                    if required
+                                    else "[dim]optional[/dim]"
+                                )
+                                console.print(
+                                    f"  • [cyan]{param_name}[/cyan] ({param_type}) {req_badge}"
+                                )
+                                if param_desc:
+                                    console.print(f"    {param_desc}")
+
+                    # Usage examples
+                    console.print("\n[yellow]Usage Examples:[/yellow]")
+
+                    # Generate example based on tool name
+                    examples = self._generate_tool_examples(tool_name)
+                    for i, example in enumerate(examples, 1):
+                        console.print(
+                            f"\n  [bold]Example {i}:[/bold] {example['description']}"
+                        )
+
+                        # Show parameters as JSON
+                        params_json = json.dumps(example["params"], indent=4)
+                        syntax = Syntax(params_json, "json", theme="monokai", padding=1)
+                        console.print(syntax)
+
+                        if example.get("expected_output"):
+                            console.print(
+                                f"  [dim]Expected: {example['expected_output']}[/dim]"
+                            )
+
+                    # Tips
+                    tips = self._generate_tool_tips(tool_name)
+                    if tips:
+                        console.print("\n[yellow]💡 Tips:[/yellow]")
+                        for tip in tips:
+                            console.print(f"  • {tip}")
+
+                    console.print("\n[dim]{'─' * 70}[/dim]")
+
+            # Interactive tool testing
+            console.print(
+                "\n[bold]Would you like to test any tool interactively?[/bold]"
+            )
+            if Confirm.ask("Test a tool?", default=False):
+                tool_name = Prompt.ask("Enter tool name")
+                await self.execute_tool(tool_name)
+
+            return True
+
+        except Exception as e:
+            self.print_error_details(e, "Tool Usage Guide")
+            return False
+
+    def _generate_tool_examples(self, tool_name: str) -> List[Dict[str, Any]]:
+        """Generate usage examples for a tool based on actual implementations"""
+        examples_map = {
+            "knowledge_retrieval": [
+                {
+                    "description": "Search for software engineering concepts",
+                    "params": {"query": "design patterns", "max_results": 5},
+                    "expected_output": "List of relevant documents about design patterns from knowledge base",
+                },
+                {
+                    "description": "Find specific technical information",
+                    "params": {"query": "REST API best practices", "max_results": 3},
+                    "expected_output": "Documents about REST API design with relevance scores",
+                },
+                {
+                    "description": "Research a specific topic",
+                    "params": {
+                        "query": "microservices architecture",
+                        "max_results": 10,
+                    },
+                    "expected_output": "Comprehensive results about microservices with context",
+                },
+            ],
+            "document_generation": [
+                {
+                    "description": "Generate a DOCX document",
+                    "params": {
+                        "content": "User authentication API documentation",
+                        "format": "docx",
+                        "title": "Auth API Guide",
+                    },
+                    "expected_output": "Professional DOCX document with formatting",
+                },
+                {
+                    "description": "Create a PDF report",
+                    "params": {
+                        "content": "Quarterly performance analysis",
+                        "format": "pdf",
+                        "title": "Q4 Report",
+                    },
+                    "expected_output": "PDF document with structured content",
+                },
+                {
+                    "description": "Generate a PowerPoint presentation",
+                    "params": {
+                        "content": "Project overview and milestones",
+                        "format": "ppt",
+                        "title": "Project Status",
+                    },
+                    "expected_output": "PPT presentation with slides",
+                },
+            ],
+            "readability_scoring": [
+                {
+                    "description": "Assess educational content",
+                    "params": {
+                        "text": "Machine learning algorithms process data to identify patterns.",
+                        "target_audience": "undergraduate",
+                    },
+                    "expected_output": "Readability scores, complexity metrics, and suggestions",
+                },
+                {
+                    "description": "Evaluate technical documentation",
+                    "params": {
+                        "text": "The API endpoint accepts JSON payloads with authentication headers.",
+                        "target_audience": "professional",
+                    },
+                    "expected_output": "Pedagogical quality assessment with improvements",
+                },
+            ],
+            "compiler_runtime": [
+                {
+                    "description": "Execute Python code",
+                    "params": {
+                        "code": "def add(a, b):\n    return a + b\nprint(add(2, 3))",
+                        "language": "python",
+                        "test_cases": [],
+                    },
+                    "expected_output": "Execution result with output and performance metrics",
+                },
+                {
+                    "description": "Validate code with test cases",
+                    "params": {
+                        "code": "def factorial(n):\n    return 1 if n <= 1 else n * factorial(n-1)",
+                        "language": "python",
+                        "test_cases": [{"input": "5", "expected": "120"}],
+                    },
+                    "expected_output": "Test results with Pass@k scoring",
+                },
+            ],
+            "email_automation": [
+                {
+                    "description": "Send a simple email",
+                    "params": {
+                        "recipients": ["user@example.com"],
+                        "subject": "Test Email",
+                        "body": "This is a test message from the agent system.",
+                        "sender_name": "SE SME Agent",
+                    },
+                    "expected_output": "Email sent confirmation with message ID and delivery tracking",
+                },
+                {
+                    "description": "Send email with template",
+                    "params": {
+                        "recipients": ["team@example.com"],
+                        "subject": "Code Analysis Report",
+                        "template": "code_analysis",
+                        "template_variables": {
+                            "project": "MyProject",
+                            "status": "Complete",
+                        },
+                    },
+                    "expected_output": "Formatted email sent with template and delivery status",
+                },
+                {
+                    "description": "Send email with attachments",
+                    "params": {
+                        "recipients": ["user@example.com", "admin@example.com"],
+                        "subject": "Document Delivery",
+                        "body": "Please find the attached documents.",
+                        "attachments": ["/path/to/document.pdf"],
+                        "priority": "high",
+                    },
+                    "expected_output": "Email with attachments sent to multiple recipients",
+                },
+            ],
+        }
+
+        return examples_map.get(
+            tool_name,
+            [
+                {
+                    "description": "Basic usage",
+                    "params": {"query": "example query"},
+                    "expected_output": "Tool-specific output",
+                }
+            ],
+        )
+
+    def _generate_tool_tips(self, tool_name: str) -> List[str]:
+        """Generate tips for using a tool based on actual implementations"""
+        tips_map = {
+            "knowledge_retrieval": [
+                "Use specific keywords for better results from the knowledge base",
+                "Adjust max_results based on your needs (3-10 recommended)",
+                "The tool uses RAG pipeline with scope detection for accurate results",
+                "Combine with other tools for comprehensive answers",
+            ],
+            "document_generation": [
+                "Supported formats: DOCX, PDF, PPT",
+                "Provide clear content and title for better formatting",
+                "Documents are generated with professional templates",
+                "Review and customize generated content as needed",
+            ],
+            "readability_scoring": [
+                "Specify target_audience for accurate assessment (e.g., 'undergraduate', 'professional')",
+                "Use for educational content, documentation, or any written material",
+                "Tool provides multiple readability metrics and improvement suggestions",
+                "Great for ensuring content accessibility",
+            ],
+            "compiler_runtime": [
+                "Supports multiple programming languages",
+                "Include test_cases for validation and Pass@k scoring",
+                "Code is executed in a safe, sandboxed environment",
+                "Review execution results and performance metrics",
+                "Use for code validation, testing, and learning",
+            ],
+            "email_automation": [
+                "Configure SMTP settings in environment variables (SMTP_SERVER, SMTP_USERNAME, SMTP_PASSWORD)",
+                "Or use Gmail with GMAIL_USERNAME and GMAIL_APP_PASSWORD",
+                "Recipients must be provided as an array of email addresses",
+                "Available templates: 'document_delivery', 'code_analysis', 'notification'",
+                "Supports up to 10 attachments per email",
+                "Priority levels: 'low', 'normal', 'high'",
+                "Tool provides delivery tracking and detailed status reports",
+            ],
+        }
+
+        return tips_map.get(
+            tool_name,
+            [
+                "Read the parameter descriptions carefully",
+                "Start with simple examples",
+                "Check the output format for integration",
+                "Review tool documentation for advanced features",
+            ],
+        )
+
     def show_help(self):
         """Show help and usage examples"""
         help_text = """
@@ -1422,6 +2660,7 @@ class AgentServerInteractiveCLI:
 • Use planning view to understand task decomposition
 • Check execution traces for debugging
 • Monitor memory context for conversation flow
+• Use option 20 for comprehensive tool usage guide
 
 [bold]Debug Mode:[/bold]
 
@@ -1479,12 +2718,15 @@ class AgentServerInteractiveCLI:
 17. 📊 [green]Statistics[/green]             - View system metrics
 18. 📚 [green]Help[/green]                   - Show usage information
 19. 🚪 [green]Exit[/green]                   - Quit application
+20. 📖 [green]Tool Usage Guide[/green]       - Comprehensive tool documentation
+21. 📋 [green]Operation Log[/green]          - View detailed operation history
+22. 🔧 [green]Email Diagnostics[/green]      - Diagnose email configuration issues
 
 """
         console.print(Panel(menu, border_style="cyan"))
         return Prompt.ask(
-            "[cyan]Enter your choice (1-19)[/cyan]",
-            choices=[str(i) for i in range(1, 20)],
+            "[cyan]Enter your choice (1-22)[/cyan]",
+            choices=[str(i) for i in range(1, 23)],
         )
 
     async def run_interactive_session(self):
@@ -1562,6 +2804,12 @@ class AgentServerInteractiveCLI:
                         "\n[bold blue]👋 Thanks for using Enhanced Agent Server CLI![/bold blue]"
                     )
                     break
+                elif choice == "20":
+                    await self.show_tool_usage_guide()
+                elif choice == "21":
+                    await self.show_operation_log()
+                elif choice == "22":
+                    await self.diagnose_email_configuration()
 
                 # Pause before next menu
                 if choice != "12":

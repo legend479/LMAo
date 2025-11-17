@@ -10,7 +10,7 @@ from pathlib import Path
 from datetime import datetime
 
 # Add src to path
-sys.path.insert(0, str(Path(__file__).parent / "src"))
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from src.agent_server.main import get_agent_server
 from src.shared.llm.integration import get_llm_integration
