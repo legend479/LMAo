@@ -1,0 +1,106 @@
+version: '3.8'
+
+# Development override for docker-compose
+# Usage: docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+services:
+  api-server:
+    build:
+      context: .
+      dockerfile: docker/api-server/Dockerfile
+      target: builder
+    environment:
+      - ENVIRONMENT=development
+      - DEBUG=true
+      - LOG_LEVEL=DEBUG
+    volumes:
+      - ./src:/app/src:ro
+      - ./uploads:/app/uploads
+      - ./logs:/app/logs
+    command: ["python", "-m", "uvicorn", "src.api_server.main:app", 
+              "--host", "0.0.0.0", "--port", "8000", "--reload", 
+              "--log-level", "debug"]
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 4G
+
+  agent-server:
+    build:
+      context: .
+      dockerfile: docker/agent-server/Dockerfile
+      target: builder
+    environment:
+      - ENVIRONMENT=development
+      - DEBUG=true
+      - LOG_LEVEL=DEBUG
+    volumes:
+      - ./src:/app/src:ro
+      - ./logs:/app/logs
+    command: ["python", "-m", "uvicorn", "src.agent_server.main:app", 
+              "--host", "0.0.0.0", "--port", "8001", "--reload",
+              "--log-level", "debug"]
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 4G
+
+  rag-pipeline:
+    build:
+      context: .
+      dockerfile: docker/rag-pipeline/Dockerfile
+      target: builder
+    environment:
+      - ENVIRONMENT=development
+      - DEBUG=true
+      - LOG_LEVEL=DEBUG
+    volumes:
+      - ./src:/app/src:ro
+      - ./data:/app/data
+      - ./logs:/app/logs
+    command: ["python", "-m", "uvicorn", "src.rag_pipeline.main:app", 
+              "--host", "0.0.0.0", "--port", "8002", "--reload",
+              "--log-level", "debug"]
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 6G
+
+  web-ui:
+    build:
+      context: .
+      dockerfile: docker/web-ui/Dockerfile
+      target: builder
+    volumes:
+      - ./ui/src:/app/src:ro
+      - ./ui/public:/app/public:ro
+    command: ["npm", "start"]
+    environment:
+      - REACT_APP_API_URL=http://localhost:8000
+      - REACT_APP_WS_URL=ws://localhost:8000
+      - CHOKIDAR_USEPOLLING=true
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+
+  postgres:
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_PASSWORD=devpassword
+
+  redis:
+    ports:
+      - "6379:6379"
+
+  elasticsearch:
+    environment:
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ports:
+      - "9200:9200"
+      - "9300:9300"
