@@ -203,24 +203,34 @@ class RAGPipeline:
                 "Generating embeddings for chunks",
                 chunk_count=len(processed_doc.chunks),
             )
-            for i, chunk in enumerate(processed_doc.chunks):
+            if processed_doc.chunks:
                 try:
-                    embedding_result = await self.embedding_manager.generate_embeddings(
-                        chunk.content
+                    texts = [chunk.content for chunk in processed_doc.chunks]
+                    embedding_results = (
+                        await self.embedding_manager.generate_batch_embeddings(texts)
                     )
-                    chunk.embeddings = {
-                        "general": embedding_result.general_embedding,
-                        "domain": embedding_result.domain_embedding,
-                    }
-                    logger.debug(
-                        f"Generated embeddings for chunk {i+1}/{len(processed_doc.chunks)}"
-                    )
+
+                    for i, (chunk, embedding_result) in enumerate(
+                        zip(processed_doc.chunks, embedding_results)
+                    ):
+                        if embedding_result is None:
+                            chunk.embeddings = None
+                            continue
+
+                        chunk.embeddings = {
+                            "general": embedding_result.general_embedding,
+                            "domain": embedding_result.domain_embedding,
+                        }
+                        logger.debug(
+                            f"Generated embeddings for chunk {i+1}/{len(processed_doc.chunks)}"
+                        )
                 except Exception as e:
                     logger.warning(
-                        f"Failed to generate embeddings for chunk {i+1}: {e}"
+                        f"Failed to generate embeddings for chunks in batch: {e}"
                     )
-                    # Continue without embeddings - chunks can still be stored for keyword search
-                    chunk.embeddings = None
+                    for chunk in processed_doc.chunks:
+                        # Continue without embeddings - chunks can still be stored for keyword search
+                        chunk.embeddings = None
 
             # Store in vector database
             stored_doc_id = await self.vector_store.store_document(processed_doc)
@@ -252,37 +262,70 @@ class RAGPipeline:
         file_paths: List[str],
         metadata_list: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
-        """Ingest multiple documents in batch"""
+        """Ingest multiple documents in batch (full pipeline).
+
+        IMPORTANT: This method must mirror ingest_document semantics and
+        ensure that documents are *stored* in the vector store so they
+        become searchable. Previously this only ran document_processor
+        and never indexed chunks, which resulted in empty search results
+        even though chunking succeeded.
+        """
+
         if not self._initialized:
             await self.initialize()
 
         logger.info("Starting batch ingestion", document_count=len(file_paths))
 
-        # Use ingestion service for batch processing
-        # Create temporary file list with metadata
-        files_with_metadata = list(
-            zip(file_paths, metadata_list or [{}] * len(file_paths))
-        )
+        if metadata_list is None:
+            metadata_list = [{}] * len(file_paths)
+        elif len(metadata_list) != len(file_paths):
+            # Pad metadata_list for safety while keeping behaviour predictable
+            metadata_list = list(metadata_list) + [{}] * (
+                len(file_paths) - len(metadata_list)
+            )
 
-        # Process using ingestion service batch method
-        batch_result = await self.document_processor.process_batch(
-            file_paths, metadata_list, max_concurrent=5
-        )
+        successful = 0
+        failed = 0
+        errors: List[str] = []
+        results: List[Dict[str, Any]] = []
+        start_time = time.time()
+
+        for file_path, metadata in zip(file_paths, metadata_list):
+            try:
+                logger.info("Processing file in batch ingestion", file_path=file_path)
+                result = await self.ingest_document(file_path, metadata)
+
+                if result.get("status") == "success":
+                    successful += 1
+                else:
+                    failed += 1
+                    errors.append(
+                        f"Failed to process {file_path}: {result.get('error', 'Unknown error')}"
+                    )
+
+                results.append({"file_path": file_path, **result})
+            except Exception as e:
+                failed += 1
+                err_msg = f"Exception while ingesting {file_path}: {e}"
+                errors.append(err_msg)
+                logger.error(err_msg)
+
+        processing_time = time.time() - start_time
 
         logger.info(
             "Batch ingestion completed",
-            total=batch_result.total_documents,
-            successful=batch_result.successful,
-            failed=batch_result.failed,
+            total=len(file_paths),
+            successful=successful,
+            failed=failed,
         )
 
         return {
-            "total_documents": batch_result.total_documents,
-            "successful": batch_result.successful,
-            "failed": batch_result.failed,
-            "processing_time": batch_result.processing_time,
-            "results": batch_result.results,
-            "errors": batch_result.errors,
+            "total_documents": len(file_paths),
+            "successful": successful,
+            "failed": failed,
+            "processing_time": processing_time,
+            "results": results,
+            "errors": errors,
         }
 
     async def ingest_from_directories(self, source_paths: List[str]) -> Dict[str, Any]:
@@ -375,37 +418,54 @@ class RAGPipeline:
         logger.info(f"Starting optimized fast ingestion of {len(file_paths)} documents")
 
         try:
-            # Use optimized ingestion service
-            result = await self.optimized_ingestion.ingest_documents_optimized(
+            # Phase 1: run the optimized ingestion pipeline (fast parsing/chunking)
+            opt_result = await self.optimized_ingestion.ingest_documents_optimized(
                 file_paths, metadata_list
             )
 
-            # Get performance metrics
+            # Get performance metrics from optimized path
             metrics = await self.optimized_ingestion.get_performance_metrics()
 
-            # Calculate throughput
+            # Calculate throughput based on optimized processing time
             throughput = (
-                result.successful / result.processing_time
-                if result.processing_time > 0
+                opt_result.successful / opt_result.processing_time
+                if opt_result.processing_time > 0
                 else 0
             )
 
             logger.info(
-                f"Optimized ingestion completed: {result.successful} successful, "
-                f"{result.failed} failed, {result.processing_time:.2f}s total "
+                f"Optimized ingestion (phase 1) completed: {opt_result.successful} successful, "
+                f"{opt_result.failed} failed, {opt_result.processing_time:.2f}s total "
                 f"({throughput:.1f} files/sec)"
+            )
+
+            # Phase 2: ensure documents are fully ingested into the RAG pipeline
+            # (embeddings + Elasticsearch indexing). This reuses the standard
+            # ingestion path so that search sees the new documents.
+            index_result = await self.ingest_batch(file_paths, metadata_list)
+
+            logger.info(
+                "Optimized ingestion (phase 2 indexing) completed",
+                total=index_result["total_documents"],
+                successful=index_result["successful"],
+                failed=index_result["failed"],
             )
 
             return {
                 "status": "success",
-                "total_files": result.total_documents,
-                "successful": result.successful,
-                "failed": result.failed,
-                "processing_time": result.processing_time,
+                "total_files": opt_result.total_documents,
+                "successful": index_result["successful"],
+                "failed": index_result["failed"],
+                # Preserve the faster processing time/throughput from the
+                # optimized stage for reporting purposes
+                "processing_time": opt_result.processing_time,
                 "throughput": throughput,
                 "metrics": metrics,
-                "results": result.results,
-                "errors": result.errors,
+                # Expose detailed per-file results and errors from the
+                # indexing stage, since that reflects what is actually
+                # searchable in the vector store
+                "results": index_result["results"],
+                "errors": index_result["errors"],
             }
 
         except Exception as e:

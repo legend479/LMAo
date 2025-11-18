@@ -822,6 +822,38 @@ LOG_LEVEL=INFO
             optimize_context=True,
         )
 
+    async def search_documents(
+        self,
+        query: str,
+        search_type: str = "hybrid",
+        max_results: int = 10,
+    ) -> bool:
+        """Programmatic search helper used by demo flows.
+
+        This is a thin wrapper around the main search endpoint on the
+        underlying RAG pipeline, returning True if any results are found.
+        """
+
+        # Re-use the core execution path so behaviour stays consistent
+        return await self._execute_search(
+            query=query,
+            search_type=search_type,
+            max_results=max_results,
+            enable_reformulation=False,
+            use_adaptive=False,
+            optimize_context=False,
+        )
+
+    # Backwards‑compat alias – some callers expect `search_document` (singular)
+    # to exist on the CLI. Keep behaviour identical to search_documents.
+    async def search_document(
+        self,
+        query: str,
+        search_type: str = "hybrid",
+        max_results: int = 10,
+    ) -> bool:
+        return await self.search_documents(query, search_type, max_results)
+
     async def _execute_search(
         self,
         query: str,

@@ -10,6 +10,7 @@ import hashlib
 from datetime import datetime
 import asyncio
 import mimetypes
+import re
 
 # Document processing libraries
 import pypdf
@@ -153,6 +154,9 @@ class DocumentProcessor:
             content, extracted_metadata = await self._extract_content_and_metadata(
                 file_path, doc_format
             )
+
+            # Lightweight cleaning to improve chunk quality while preserving structure
+            content = self._clean_content(content)
 
             # Merge metadata
             combined_metadata = self._merge_metadata(
@@ -304,6 +308,24 @@ class DocumentProcessor:
                 title=f"Error: {Path(file_path).name}",
                 document_type=DocumentType.UNKNOWN,
             )
+
+    def _clean_content(self, content: str) -> str:
+        # Normalize newlines
+        content = content.replace("\r\n", "\n").replace("\r", "\n")
+
+        # Remove ASCII control characters except tab/newline
+        content = re.sub(r"[\x00-\x08\x0b-\x0c\x0e-\x1f\x7f]", " ", content)
+
+        # Remove common zero-width/non-printable Unicode characters
+        content = re.sub(r"[\u200b\u200c\u200d\ufeff]", "", content)
+
+        # Trim trailing spaces/tabs on each line
+        content = re.sub(r"[ \t]+\n", "\n", content)
+
+        # Collapse excessive blank lines (3+ to 2)
+        content = re.sub(r"\n{3,}", "\n\n", content)
+
+        return content.strip()
 
     async def _extract_txt_with_metadata(
         self, file_path: str
