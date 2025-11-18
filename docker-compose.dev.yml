@@ -17,6 +17,7 @@ services:
       - ./src:/app/src:ro
       - ./uploads:/app/uploads
       - ./logs:/app/logs
+    working_dir: /app
     command: ["python", "-m", "uvicorn", "src.api_server.main:app", 
               "--host", "0.0.0.0", "--port", "8000", "--reload", 
               "--log-level", "debug"]
@@ -38,6 +39,7 @@ services:
     volumes:
       - ./src:/app/src:ro
       - ./logs:/app/logs
+    working_dir: /app
     command: ["python", "-m", "uvicorn", "src.agent_server.main:app", 
               "--host", "0.0.0.0", "--port", "8001", "--reload",
               "--log-level", "debug"]
@@ -60,6 +62,7 @@ services:
       - ./src:/app/src:ro
       - ./data:/app/data
       - ./logs:/app/logs
+    working_dir: /app
     command: ["python", "-m", "uvicorn", "src.rag_pipeline.main:app", 
               "--host", "0.0.0.0", "--port", "8002", "--reload",
               "--log-level", "debug"]

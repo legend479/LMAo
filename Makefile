@@ -90,20 +90,40 @@ clean:
 # Docker commands
 docker-build:
 	@echo "Building Docker images..."
-	docker-compose build --no-cache
+	docker-compose build --parallel
+
+docker-build-no-cache:
+	@echo "Building Docker images (no cache)..."
+	docker-compose build --no-cache --parallel
 
 docker-up:
 	@echo "Starting Docker services..."
 	docker-compose up -d
+	@echo "Waiting for services to be healthy..."
+	@sleep 10
+	@echo "Services started successfully!"
+	@echo "API Server: http://localhost:8000"
+	@echo "Agent Server: http://localhost:8001"
+	@echo "RAG Pipeline: http://localhost:8002"
+	@echo "Web UI: http://localhost:3000"
+	@echo "Grafana: http://localhost:3001"
+
+docker-up-dev:
+	@echo "Starting Docker services in development mode..."
+	docker-compose -f docker-compose.yml -f docker-compose.dev.yml up -d
+	@echo "Development mode enabled with hot-reload"
 
 docker-down:
 	@echo "Stopping Docker services..."
+	docker-compose down
+
+docker-down-volumes:
+	@echo "Stopping Docker services and removing volumes..."
 	docker-compose down -v
 
 docker-restart:
 	@echo "Restarting Docker services..."
-	docker-compose down -v
-	docker-compose up -d
+	docker-compose restart
 
 docker-logs:
 	@echo "Viewing Docker logs..."
@@ -120,6 +140,35 @@ docker-logs-agent:
 docker-logs-rag:
 	@echo "Viewing RAG pipeline logs..."
 	docker-compose logs -f rag-pipeline
+
+docker-logs-ui:
+	@echo "Viewing Web UI logs..."
+	docker-compose logs -f web-ui
+
+docker-ps:
+	@echo "Docker services status:"
+	@docker-compose ps
+
+docker-stats:
+	@echo "Docker resource usage:"
+	@docker stats --no-stream
+
+docker-clean:
+	@echo "Cleaning up Docker resources..."
+	docker-compose down -v
+	docker system prune -f
+	@echo "Docker cleanup complete"
+
+docker-clean-all:
+	@echo "WARNING: This will remove ALL Docker resources including images!"
+	@printf "Are you sure? [y/N] "; \
+		read REPLY; \
+		case "$$REPLY" in \
+		  [Yy]*) docker-compose down -v; \
+		         docker system prune -a -f --volumes; \
+		         echo "Complete Docker cleanup done" ;; \
+		  *)     echo "Aborted" ;; \
+		esac
 
 # Development utilities
 format:
@@ -171,8 +220,9 @@ backup:
 # Restore
 restore:
 	@echo "Restoring from backup..."
-	@read -p "Enter backup file path: " backup_file; \
-	docker-compose exec -T postgres psql -U postgres se_sme_agent < $$backup_file
+	@printf "Enter backup file path: "; \
+		read backup_file; \
+		docker-compose exec -T postgres psql -U postgres se_sme_agent < "$$backup_file"
 
 # Quick setup for new developers
 setup:

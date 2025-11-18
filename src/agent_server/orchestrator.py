@@ -240,6 +240,8 @@ class LangGraphOrchestrator:
 
         except Exception as e:
             logger.error("Failed to initialize LangGraph Orchestrator", error=str(e))
+            # Cleanup on failure
+            await self._cleanup_partial_initialization()
             raise
 
     async def create_workflow_graph(self, plan: ExecutionPlan) -> StateGraph:
@@ -310,21 +312,54 @@ class LangGraphOrchestrator:
         self.workflow_graphs[plan.plan_id] = compiled_workflow
         self.workflow_timestamps[plan.plan_id] = datetime.now(UTC)
 
-        # Enforce size limit (LRU eviction)
+        # Enforce size limit (LRU eviction with safe cleanup)
         if len(self.workflow_graphs) > self.max_cached_workflows:
-            # Remove oldest workflow
+            # Remove oldest workflow safely
             oldest_plan_id = min(self.workflow_timestamps.items(), key=lambda x: x[1])[
                 0
             ]
-            del self.workflow_graphs[oldest_plan_id]
-            if oldest_plan_id in self.workflow_nodes:
-                del self.workflow_nodes[oldest_plan_id]
-            del self.workflow_timestamps[oldest_plan_id]
-            logger.info(
-                f"Evicted old workflow due to cache size limit: {oldest_plan_id}"
-            )
+            if await self._safe_cleanup_workflow(oldest_plan_id):
+                logger.info(
+                    f"Evicted old workflow due to cache size limit: {oldest_plan_id}"
+                )
+            else:
+                logger.warning(
+                    f"Could not evict workflow {oldest_plan_id} - still in use"
+                )
 
         return compiled_workflow
+
+    async def _safe_cleanup_workflow(self, plan_id: str) -> bool:
+        """Safely cleanup a workflow graph"""
+        # Check if workflow is in active use
+        active_with_plan = [
+            exec_id
+            for exec_id, info in self.active_executions.items()
+            if info.get("plan", {}).plan_id == plan_id
+        ]
+
+        if active_with_plan:
+            logger.debug(f"Skipping cleanup of active workflow: {plan_id}")
+            return False
+
+        # Cleanup workflow resources
+        if plan_id in self.workflow_graphs:
+            workflow = self.workflow_graphs[plan_id]
+            # Explicitly cleanup if workflow has cleanup method
+            if hasattr(workflow, "cleanup"):
+                try:
+                    await workflow.cleanup()
+                except Exception as e:
+                    logger.warning(f"Error during workflow cleanup: {e}")
+            del self.workflow_graphs[plan_id]
+
+        if plan_id in self.workflow_nodes:
+            del self.workflow_nodes[plan_id]
+
+        if plan_id in self.workflow_timestamps:
+            del self.workflow_timestamps[plan_id]
+
+        return True
 
     async def _cleanup_old_workflows(self):
         """Remove workflows older than TTL"""
@@ -336,17 +371,14 @@ class LangGraphOrchestrator:
             if timestamp < cutoff_time
         ]
 
+        cleaned_count = 0
         for plan_id in expired_plans:
-            if plan_id in self.workflow_graphs:
-                del self.workflow_graphs[plan_id]
-            if plan_id in self.workflow_nodes:
-                del self.workflow_nodes[plan_id]
-            if plan_id in self.workflow_timestamps:
-                del self.workflow_timestamps[plan_id]
+            if await self._safe_cleanup_workflow(plan_id):
+                cleaned_count += 1
 
-        if expired_plans:
+        if cleaned_count > 0:
             logger.info(
-                f"Cleaned up {len(expired_plans)} expired workflows",
+                f"Cleaned up {cleaned_count} expired workflows",
                 cutoff_time=cutoff_time.isoformat(),
             )
 
@@ -745,21 +777,41 @@ class LangGraphOrchestrator:
                 }
 
             except Exception as e:
-                logger.error("Task execution failed", task_id=task_id, error=str(e))
+                import traceback
+                import sys
+
+                error_traceback = traceback.format_exc()
+                execution_time = asyncio.get_event_loop().time() - start_time
+
+                logger.error(
+                    "Task execution failed",
+                    task_id=task_id,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                    traceback=error_traceback,
+                    task_type=task.get("type"),
+                    task_parameters=task.get("parameters", {}),
+                )
 
                 state.failed_tasks.append(task_id)
 
-                # Store error result with context
+                # Safely get dependency context
+                dep_context_keys = []
+                if "dependency_context" in locals() and dependency_context:
+                    dep_context_keys = list(dependency_context.keys())
+
+                # Store error result with comprehensive context
                 error_result = {
                     "error": True,
                     "error_message": str(e),
                     "error_type": type(e).__name__,
+                    "error_traceback": error_traceback,
                     "task_id": task_id,
-                    "dependencies_attempted": (
-                        list(dependency_context.keys())
-                        if "dependency_context" in locals()
-                        else []
-                    ),
+                    "task_type": task.get("type"),
+                    "task_parameters": task.get("parameters", {}),
+                    "dependencies_attempted": dep_context_keys,
+                    "timestamp": datetime.now(UTC).isoformat(),
+                    "execution_time": execution_time,
                 }
                 state.task_results[task_id] = error_result
 
@@ -1256,8 +1308,14 @@ class LangGraphOrchestrator:
                             max_retries=task.get("max_retries", 3),
                         )
 
-                        # Get and execute tool
-                        tool = await self.tool_registry.get_tool(tool_name)
+                        # Get and execute tool (use get_tool_by_name for name-based lookup)
+                        tool = await self.tool_registry.get_tool_by_name(tool_name)
+
+                        if tool is None:
+                            raise ValueError(
+                                f"Tool '{tool_name}' not found in registry"
+                            )
+
                         result = await tool.execute(parameters, context)
 
                         execution_time = asyncio.get_event_loop().time() - start_time
@@ -1336,10 +1394,11 @@ class LangGraphOrchestrator:
             # Import RAG pipeline here to avoid circular imports
             from src.rag_pipeline.main import RAGPipeline
 
-            # Initialize RAG pipeline if not already done
-            if not hasattr(self, "rag_pipeline"):
-                self.rag_pipeline = RAGPipeline()
-                await self.rag_pipeline.initialize()
+            # Initialize RAG pipeline if not already done (use singleton)
+            if not hasattr(self, "rag_pipeline") or self.rag_pipeline is None:
+                from src.rag_pipeline.main import get_rag_pipeline
+
+                self.rag_pipeline = await get_rag_pipeline()
 
             # Perform search
             search_results = await self.rag_pipeline.search(
@@ -1954,61 +2013,84 @@ Provide accurate and useful responses that build on the ongoing discussion.
         if not original_query and isinstance(final_state, dict):
             original_query = final_state.get("original_query")
 
-        # If we have tool results and original query, synthesize a coherent response
-        if tool_results and original_query and self.llm_integration:
+        # Filter out error-only results
+        successful_results = [
+            r for r in tool_results if not r.get("result", {}).get("error", False)
+        ]
+
+        # If we have successful results and original query, synthesize
+        if successful_results and original_query and self.llm_integration:
             try:
-                return await self._synthesize_coherent_response(
-                    original_query, tool_results, final_state
+                synthesized = await self._synthesize_coherent_response(
+                    original_query, successful_results, final_state
                 )
+
+                # Validate synthesis quality
+                if synthesized and len(synthesized.strip()) >= 20:
+                    return synthesized
+                else:
+                    logger.warning("LLM synthesis returned insufficient content")
             except Exception as e:
-                logger.error(
-                    f"Response synthesis failed: {e}, falling back to extraction"
+                logger.error(f"Response synthesis failed: {e}, falling back")
+
+        # Fallback: Extract from successful tool results
+        if successful_results:
+            extracted = self._extract_best_response(successful_results)
+            if extracted:
+                return extracted
+
+        # All tasks failed - provide helpful error message
+        if tool_results and not successful_results:
+            failed_count = len(tool_results)
+            error_types = set(
+                r.get("result", {}).get("error_type", "Unknown") for r in tool_results
+            )
+
+            if original_query:
+                return (
+                    f"I apologize, but I encountered errors while processing your question: '{original_query[:100]}...'. "
+                    f"All {failed_count} attempted operations failed ({', '.join(error_types)}). "
+                    f"Could you please rephrase your question or try again?"
+                )
+            else:
+                return (
+                    f"I apologize, but I encountered {failed_count} errors while processing your request. "
+                    f"Please try again or rephrase your question."
                 )
 
-        # Fallback: Extract the best available response from tool results
-        if tool_results:
-            # Get the most recent tool result (usually the last task executed)
-            for tool_result in reversed(tool_results):
-                result_data = tool_result.get("result", {})
-
-                # Check if this is a RAG search result with an LLM response
-                if isinstance(result_data, dict):
-                    # RAG search returns result as a string in the "result" field
-                    if "result" in result_data and isinstance(
-                        result_data["result"], str
-                    ):
-                        response_text = result_data["result"]
-                        if (
-                            response_text
-                            and not response_text.startswith("Tool")
-                            and not response_text.startswith(
-                                "Knowledge retrieval failed"
-                            )
-                        ):
-                            return response_text
-                    # Check for other result formats
-                    elif "response" in result_data:
-                        return result_data["response"]
-                    elif "content" in result_data:
-                        return result_data["content"]
-                elif isinstance(result_data, str) and result_data:
-                    # Direct string result
-                    if not result_data.startswith(
-                        "Tool"
-                    ) and not result_data.startswith("Knowledge retrieval failed"):
-                        return result_data
-
-        # Fallback to generic message if no response found
-        if not isinstance(final_state, dict):
+        # No results at all
+        if original_query:
+            return f"I processed your question: '{original_query[:100]}...', but I don't have enough information to provide a complete answer. Could you provide more details?"
+        else:
             return "I've processed your request. How else can I help you?"
 
-        completed_tasks = final_state.get("completed_tasks", [])
-        failed_tasks = final_state.get("failed_tasks", [])
+    def _extract_best_response(
+        self, successful_results: List[Dict[str, Any]]
+    ) -> Optional[str]:
+        """Extract the best response from successful tool results"""
+        for tool_result in reversed(successful_results):
+            result_data = tool_result.get("result", {})
 
-        if failed_tasks:
-            return f"I encountered some issues while processing your request. I completed {len(completed_tasks)} tasks successfully, but {len(failed_tasks)} tasks failed. Would you like me to try a different approach?"
-        else:
-            return f"I've completed processing your request. Is there anything else you'd like to know?"
+            if isinstance(result_data, dict):
+                # Try various result fields
+                for field in ["result", "response", "content", "answer"]:
+                    if field in result_data:
+                        content = result_data[field]
+                        if isinstance(content, str) and len(content) > 20:
+                            # Validate it's not an error message
+                            if not any(
+                                err in content.lower()
+                                for err in ["error", "failed", "exception"]
+                            ):
+                                return content
+            elif isinstance(result_data, str) and len(result_data) > 20:
+                if not any(
+                    err in result_data.lower()
+                    for err in ["error", "failed", "exception"]
+                ):
+                    return result_data
+
+        return None
 
     async def _synthesize_coherent_response(
         self,
@@ -2140,6 +2222,23 @@ Speak naturally as if you're having a conversation, not listing tool outputs."""
         )
 
         return "".join(response_parts)
+
+    async def _cleanup_partial_initialization(self):
+        """Cleanup resources if initialization fails"""
+        if self.redis_client:
+            try:
+                await self.redis_client.close()
+                logger.info("Redis connection closed during cleanup")
+            except Exception as e:
+                logger.error(f"Error closing Redis during cleanup: {e}")
+            finally:
+                self.redis_client = None
+
+        if self.checkpointer:
+            self.checkpointer = None
+
+        self._initialized = False
+        logger.info("Partial initialization cleanup completed")
 
     async def _setup_workflow_monitoring(self):
         """Setup workflow monitoring and metrics collection"""

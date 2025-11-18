@@ -887,13 +887,22 @@ class RAGPipeline:
 
 
 # Global RAG pipeline instance
+import asyncio
+
 rag_pipeline = RAGPipeline()
+_rag_pipeline_lock = asyncio.Lock()
 
 
 async def get_rag_pipeline() -> RAGPipeline:
-    """Get the global RAG pipeline instance"""
-    if not rag_pipeline._initialized:
-        await rag_pipeline.initialize()
+    """Get the global RAG pipeline instance (thread-safe)"""
+    if rag_pipeline._initialized:
+        return rag_pipeline
+
+    async with _rag_pipeline_lock:
+        # Double-check after acquiring lock
+        if not rag_pipeline._initialized:
+            await rag_pipeline.initialize()
+
     return rag_pipeline
 
 

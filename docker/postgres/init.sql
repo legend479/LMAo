@@ -1,10 +1,10 @@
 -- Initialize SE SME Agent Database
 
--- Create database if not exists
-CREATE DATABASE se_sme_agent;
+-- -- Create database if not exists
+-- CREATE DATABASE se_sme_agent;
 
--- Connect to the database
-\c se_sme_agent;
+-- -- Connect to the database
+-- \c se_sme_agent;
 
 -- Create extensions
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";

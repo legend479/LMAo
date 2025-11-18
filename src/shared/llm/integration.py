@@ -320,15 +320,21 @@ class LLMIntegration:
 
 # Global integration instance
 _global_integration: Optional[LLMIntegration] = None
+_integration_lock = asyncio.Lock()
 
 
 async def get_llm_integration() -> LLMIntegration:
-    """Get or create global LLM integration instance"""
+    """Get or create global LLM integration instance (thread-safe)"""
     global _global_integration
 
-    if _global_integration is None:
-        _global_integration = LLMIntegration()
-        await _global_integration.initialize()
+    if _global_integration is not None:
+        return _global_integration
+
+    async with _integration_lock:
+        # Double-check after acquiring lock
+        if _global_integration is None:
+            _global_integration = LLMIntegration()
+            await _global_integration.initialize()
 
     return _global_integration
 

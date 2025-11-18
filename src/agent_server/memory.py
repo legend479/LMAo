@@ -620,8 +620,14 @@ class MemoryManager:
         self._initialized = False
 
     async def _get_conversation_lock(self, session_id: str) -> asyncio.Lock:
-        """Get or create lock for a conversation session"""
+        """Get or create lock for a conversation session (optimized)"""
+        # Fast path: lock already exists
+        if session_id in self._conversation_locks:
+            return self._conversation_locks[session_id]
+
+        # Slow path: need to create lock
         async with self._lock_manager_lock:
+            # Double-check after acquiring lock
             if session_id not in self._conversation_locks:
                 self._conversation_locks[session_id] = asyncio.Lock()
             return self._conversation_locks[session_id]
