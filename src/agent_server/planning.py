@@ -242,12 +242,12 @@ class PlanningModule:
             - KNOWLEDGE_RETRIEVAL: User wants to learn about or understand something
             - CONTENT_GENERATION: User wants to create explanatory content, tutorials, or documentation
             - CODE_GENERATION: User wants to write, implement, or create code
-            - DOCUMENT_GENERATION: User wants to create formal documents, reports, or exports
+            - DOCUMENT_GENERATION: User wants to create documents, reports, or exports
             - ANALYSIS: User wants to analyze, review, or evaluate something
             - MULTI_STEP: User's request involves multiple sequential tasks
             - GENERAL_QUERY: Simple questions or general assistance
 
-            Respond with only the category name."""
+            Respond with only the category name. Do not explain"""
 
             # Add context if available
             context_info = ""
@@ -396,22 +396,16 @@ class PlanningModule:
         """Advanced entity extraction using patterns and context"""
 
         entities = []
+        message_lower = message.lower()
 
         # Programming language detection
         prog_languages = [
-            "python",
-            "javascript",
-            "java",
-            "c++",
-            "c#",
-            "go",
-            "rust",
-            "typescript",
-            "php",
-            "ruby",
+            "python", "javascript", "java", "c++", "c#", "go", "rust",
+            "typescript", "php", "ruby"
         ]
         for lang in prog_languages:
-            if lang in message.lower():
+            # FIX: Use regex word boundaries to avoid partial matches (e.g., "go" in "good")
+            if re.search(r"\b" + re.escape(lang) + r"\b", message_lower):
                 entities.append(
                     Entity(
                         text=lang,
@@ -423,17 +417,11 @@ class PlanningModule:
 
         # Framework detection
         frameworks = [
-            "react",
-            "angular",
-            "vue",
-            "django",
-            "flask",
-            "spring",
-            "express",
-            "fastapi",
+            "react", "angular", "vue", "django", "flask", "spring",
+            "express", "fastapi"
         ]
         for framework in frameworks:
-            if framework in message.lower():
+            if re.search(r"\b" + re.escape(framework) + r"\b", message_lower):
                 entities.append(
                     Entity(
                         text=framework,
@@ -446,7 +434,9 @@ class PlanningModule:
         # File format detection
         file_formats = ["pdf", "docx", "pptx", "json", "xml", "csv", "yaml", "markdown"]
         for fmt in file_formats:
-            if fmt in message.lower():
+             # Use simple containment for extensions as they might appear as filename.ext
+             # But purely for formats, word boundary is safer
+             if re.search(r"\b" + re.escape(fmt) + r"\b", message_lower):
                 entities.append(
                     Entity(
                         text=fmt,
@@ -458,17 +448,11 @@ class PlanningModule:
 
         # Tool detection
         tools = [
-            "git",
-            "docker",
-            "kubernetes",
-            "jenkins",
-            "github",
-            "gitlab",
-            "aws",
-            "azure",
+            "git", "docker", "kubernetes", "jenkins", "github", "gitlab",
+            "aws", "azure"
         ]
         for tool in tools:
-            if tool in message.lower():
+            if re.search(r"\b" + re.escape(tool) + r"\b", message_lower):
                 entities.append(
                     Entity(
                         text=tool,
@@ -479,17 +463,15 @@ class PlanningModule:
                 )
 
         # Concept detection using regex patterns
+        # (Keep existing logic for concept_patterns as it already uses regex)
         concept_patterns = [
-            (
-                r"\b(design pattern|algorithm|data structure|architecture)\b",
-                EntityType.CONCEPT,
-            ),
+            (r"\b(design pattern|algorithm|data structure|architecture)\b", EntityType.CONCEPT),
             (r"\b(testing|unit test|integration test|debugging)\b", EntityType.CONCEPT),
             (r"\b(api|rest|graphql|microservice)\b", EntityType.CONCEPT),
         ]
 
         for pattern, entity_type in concept_patterns:
-            matches = re.finditer(pattern, message.lower())
+            matches = re.finditer(pattern, message_lower)
             for match in matches:
                 entities.append(
                     Entity(
@@ -644,21 +626,27 @@ class PlanningModule:
             (r"help me (.+)", "Help user {}"),
             (r"can you (.+)", "User requests to {}"),
             (r"please (.+)", "User requests to {}"),
+            # Add question patterns to catch "What is..." or "How to..."
+            (r"^(what|how|why|when|where) (.+)", "Explain {}"), 
         ]
 
         for pattern, template in goal_patterns:
             matches = re.finditer(pattern, message.lower())
             for match in matches:
-                goal = template.format(match.group(1))
+                # Catch the group but use the original message part for clarity if needed
+                # Or simply use the template structure
+                if "{}" in template:
+                    goal = template.format(match.group(1))
+                else:
+                    goal = template
                 goals.append(goal)
 
         # If no explicit goals found, infer from intent and entities
         if not goals:
-            if entities:
-                entity_text = ", ".join([e.text for e in entities[:3]])
-                goals.append(f"Work with {entity_text}")
-            else:
-                goals.append("Provide assistance with the request")
+            # CRITICAL FIX: Use the original message as the primary goal 
+            # if no specific pattern is matched.
+            # Old logic: goals.append(f"Work with {entity_text}") caused errors
+            goals.append(message)
 
         return goals
 
@@ -1050,32 +1038,46 @@ class PlanningModule:
         self, goal: Goal, analysis: QueryAnalysis, start_counter: int
     ) -> List[Dict[str, Any]]:
         """Create tasks for document generation"""
+        
+        # 1. Define IDs so we can reference them
+        content_task_id = f"task_{start_counter}"
+        doc_task_id = f"task_{start_counter + 1}"
+        
+        doc_format = self._detect_document_format(analysis.entities)
 
         tasks = [
+            # Task 1: Generate the text (The "Ink")
             {
-                "id": f"task_{start_counter}",
-                "name": "prepare_content",
+                "id": content_task_id,
+                "name": "generate_content",
                 "type": "content_generation",
                 "parameters": {
+                    "topic": goal.description, 
                     "for_document": True,
-                    "format": self._detect_document_format(analysis.entities),
+                    "format": doc_format,
                 },
                 "priority": goal.priority,
                 "estimated_duration": 3.0,
                 "goal_id": goal.goal_id,
             },
+            # Task 2: Create the PDF (The "Paper")
             {
-                "id": f"task_{start_counter + 1}",
+                "id": doc_task_id,
                 "name": "generate_document",
                 "type": "tool_execution",
                 "tool": "document_generation",
                 "parameters": {
-                    "format": self._detect_document_format(analysis.entities),
-                    "content_dependent": True,
+                    "format": doc_format,
+                    # CRITICAL FIX: This "{{ variable }}" syntax tells the 
+                    # Orchestrator to inject the result from the previous task
+                    "content": f"{{{{ {content_task_id}.result }}}}", 
+                    "filename": "software_principles.pdf" 
                 },
                 "priority": goal.priority,
                 "estimated_duration": 2.0,
                 "goal_id": goal.goal_id,
+                # Force sequential order
+                "dependencies": [content_task_id], 
             },
         ]
 
@@ -1256,6 +1258,12 @@ class PlanningModule:
         if task2.get("parameters", {}).get("context_dependent") or task2.get(
             "parameters", {}
         ).get("data_dependent"):
+            return True
+        
+        if (
+            task1.get("type") == "content_generation"
+            and task2.get("tool") == "document_generation"
+        ):
             return True
 
         return False

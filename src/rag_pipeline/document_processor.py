@@ -87,7 +87,7 @@ class DocumentProcessor:
         try:
             # Initialize document parsing libraries
             # Verify required libraries are available
-            import PyPDF2
+            import pypdf
             import docx
             import pptx
 

@@ -365,16 +365,14 @@ class ElasticsearchStore:
                     and hasattr(chunk, "embeddings")
                     and chunk.embeddings
                 ):
-                    if "general" in chunk.embeddings:
-                        chunk_data["embedding_general"] = chunk.embeddings[
-                            "general"
-                        ].tolist()
-                    if "domain" in chunk.embeddings:
-                        chunk_data["embedding_domain"] = chunk.embeddings[
-                            "domain"
-                        ].tolist()
+                    # Fix in src/rag_pipeline/vector_store.py
 
-                # Add to bulk operations
+                    if "general" in chunk.embeddings and chunk.embeddings["general"] is not None:
+                        chunk_data["embedding_general"] = chunk.embeddings["general"].tolist()
+                    if "domain" in chunk.embeddings and chunk.embeddings["domain"] is not None:
+                        chunk_data["embedding_domain"] = chunk.embeddings["domain"].tolist()
+
+                # Add to bulk operations    
                 chunk_operations.extend(
                     [
                         {

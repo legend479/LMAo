@@ -80,21 +80,20 @@ class GoogleProvider(BaseLLMProvider):
                 parts = candidate["content"]["parts"]
                 content = "".join(part.get("text", "") for part in parts)
 
+            if not content and candidate.get("finishReason") == "MAX_TOKENS":
+                logger.warning("Hit max tokens limit. Partial content might be missing or empty.")
+
             # Check for safety ratings or blocked content
             if not content:
-                # Log the full candidate for debugging
-                logger.warning(
-                    "Empty content from Google AI",
-                    candidate=candidate,
-                    finish_reason=candidate.get("finishReason"),
-                    safety_ratings=candidate.get("safetyRatings"),
-                )
-
-                # Check if content was blocked
                 if candidate.get("finishReason") == "SAFETY":
-                    raise LLMError(
-                        "Content blocked by safety filters", provider=LLMProvider.GOOGLE
-                    )
+                     raise LLMError("Content blocked by safety filters", provider=LLMProvider.GOOGLE)
+                elif candidate.get("finishReason") == "MAX_TOKENS":
+                     # It's possible to get MAX_TOKENS with 0 content if the limit is very low
+                     # But usually there is content. We'll return empty string but log warning.
+                     logger.warning("Max tokens reached with 0 content.")
+                else:
+                     # Genuine error
+                     logger.warning(f"Empty content with reason: {candidate.get('finishReason')}")
 
             # Extract usage information
             usage = {}
@@ -105,6 +104,11 @@ class GoogleProvider(BaseLLMProvider):
                     "completion_tokens": usage_meta.get("candidatesTokenCount", 0),
                     "total_tokens": usage_meta.get("totalTokenCount", 0),
                 }
+            elif candidate.get("finishReason") != "STOP": 
+                     raise LLMError(
+                        f"Generation failed with reason: {candidate.get('finishReason')}", 
+                        provider=LLMProvider.GOOGLE
+                    )
 
             return LLMResponse(
                 content=content,

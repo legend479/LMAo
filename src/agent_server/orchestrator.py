@@ -27,6 +27,13 @@ from src.shared.llm.integration import get_llm_integration
 
 logger = get_logger(__name__)
 
+def merge_dicts(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
+    """Safely merge two dictionaries for LangGraph state updates"""
+    if a is None:
+        return b or {}
+    if b is None:
+        return a or {}
+    return {**a, **b}
 
 class ExecutionState(Enum):
     PENDING = "pending"
@@ -84,8 +91,8 @@ class WorkflowState:
     completed_tasks: Annotated[List[str], operator.add] = None
     failed_tasks: Annotated[List[str], operator.add] = None
     # Use custom reducer for dict merging
-    task_results: Annotated[Dict[str, Any], lambda x, y: {**x, **y}] = None
-    context: Annotated[Dict[str, Any], lambda x, y: {**x, **y}] = None
+    task_results: Annotated[Dict[str, Any], merge_dicts] = None
+    context: Annotated[Dict[str, Any], merge_dicts] = None
     error_count: int = 0
     last_error: Optional[str] = None
     execution_path: Annotated[List[str], operator.add] = None
@@ -707,7 +714,7 @@ class LangGraphOrchestrator:
                 # Add to execution path
                 state.execution_path.append(task_id)
 
-                # CRITICAL FIX: Build dependency context from completed tasks
+                # Build dependency context from completed tasks
                 dependency_context = {}
                 task_dependencies = task.get("dependencies", [])
 
@@ -720,24 +727,40 @@ class LangGraphOrchestrator:
                         # Extract key information from dependency
                         if isinstance(dep_result, dict):
                             if "result" in dep_result:
-                                dependency_context[f"{dep_id}_result"] = dep_result[
-                                    "result"
-                                ]
+                                dependency_context[f"{dep_id}_result"] = dep_result["result"]
                             if "data" in dep_result:
-                                dependency_context[f"{dep_id}_data"] = dep_result[
-                                    "data"
-                                ]
+                                dependency_context[f"{dep_id}_data"] = dep_result["data"]
+
+                # --- RESOLVE PARAMETERS ---
+                # Create a context combining task results and direct dependency info
+                resolution_context = {**state.task_results, **dependency_context}
+
+                logger.info(
+                    f"Resolving parameters for {task_id}", 
+                    available_context_keys=list(resolution_context.keys()),
+                    task_results_count=len(state.task_results)
+                )
+                
+                # Get raw parameters
+                raw_params = task.get("parameters", {})
+                
+                # Resolve placeholders
+                resolved_params = self._resolve_parameters(raw_params, resolution_context)
+                
+                # Create a task copy with resolved parameters
+                task_with_resolved_params = task.copy()
+                task_with_resolved_params["parameters"] = resolved_params
 
                 # Inject dependency context into task parameters
                 if dependency_context:
-                    if "parameters" not in task:
-                        task["parameters"] = {}
-                    task["parameters"]["_dependency_context"] = dependency_context
+                    if "parameters" not in task_with_resolved_params:
+                        task_with_resolved_params["parameters"] = {}
+                    task_with_resolved_params["parameters"]["_dependency_context"] = dependency_context
 
                     # Also add to task context for direct access
-                    if "context" not in task:
-                        task["context"] = {}
-                    task["context"].update(dependency_context)
+                    if "context" not in task_with_resolved_params:
+                        task_with_resolved_params["context"] = {}
+                    task_with_resolved_params["context"].update(dependency_context)
 
                     logger.debug(
                         "Injected dependency context",
@@ -745,17 +768,22 @@ class LangGraphOrchestrator:
                         dependencies=list(dependency_context.keys()),
                     )
 
-                # Execute based on task type
+                # Execute based on task type using the RESOLVED task parameters
                 if task_type == "tool_execution":
-                    result = await self._execute_tool_task(task, state)
+                    result = await self._execute_tool_task(task_with_resolved_params, state)
                 elif task_type == "content_generation":
-                    result = await self._execute_content_generation_task(task, state)
+                    # Merge params into top-level for internal handlers that look for specific keys
+                    task_merged = {**task_with_resolved_params, **resolved_params}
+                    result = await self._execute_content_generation_task(task_merged, state)
                 elif task_type == "code_generation":
-                    result = await self._execute_code_generation_task(task, state)
+                    task_merged = {**task_with_resolved_params, **resolved_params}
+                    result = await self._execute_code_generation_task(task_merged, state)
                 elif task_type == "analysis":
-                    result = await self._execute_analysis_task(task, state)
+                    task_merged = {**task_with_resolved_params, **resolved_params}
+                    result = await self._execute_analysis_task(task_merged, state)
                 else:
-                    result = await self._execute_general_task(task, state)
+                    task_merged = {**task_with_resolved_params, **resolved_params}
+                    result = await self._execute_general_task(task_merged, state)
 
                 # Store result with metadata about dependencies used
                 result_with_metadata = {
@@ -777,41 +805,21 @@ class LangGraphOrchestrator:
                 }
 
             except Exception as e:
-                import traceback
-                import sys
-
-                error_traceback = traceback.format_exc()
-                execution_time = asyncio.get_event_loop().time() - start_time
-
-                logger.error(
-                    "Task execution failed",
-                    task_id=task_id,
-                    error=str(e),
-                    error_type=type(e).__name__,
-                    traceback=error_traceback,
-                    task_type=task.get("type"),
-                    task_parameters=task.get("parameters", {}),
-                )
+                logger.error("Task execution failed", task_id=task_id, error=str(e))
 
                 state.failed_tasks.append(task_id)
 
-                # Safely get dependency context
-                dep_context_keys = []
-                if "dependency_context" in locals() and dependency_context:
-                    dep_context_keys = list(dependency_context.keys())
-
-                # Store error result with comprehensive context
+                # Store error result with context
                 error_result = {
                     "error": True,
                     "error_message": str(e),
                     "error_type": type(e).__name__,
-                    "error_traceback": error_traceback,
                     "task_id": task_id,
-                    "task_type": task.get("type"),
-                    "task_parameters": task.get("parameters", {}),
-                    "dependencies_attempted": dep_context_keys,
-                    "timestamp": datetime.now(UTC).isoformat(),
-                    "execution_time": execution_time,
+                    "dependencies_attempted": (
+                        list(dependency_context.keys())
+                        if "dependency_context" in locals()
+                        else []
+                    ),
                 }
                 state.task_results[task_id] = error_result
 
@@ -1255,20 +1263,16 @@ class LangGraphOrchestrator:
 
     def _find_entry_tasks(self, plan: ExecutionPlan) -> List[str]:
         """Find tasks that have no dependencies (entry points)"""
-
         entry_tasks = []
-        all_dependencies = set()
-
-        # Collect all tasks that are dependencies
-        for deps in plan.dependencies.values():
-            all_dependencies.update(deps)
-
-        # Find tasks that are not dependencies of any other task
+        
         for task in plan.tasks:
             task_id = task["id"]
-            if task_id not in all_dependencies:
+            # FIX: A task is an entry point if it has NO prerequisites
+            # Check the list of dependencies for this specific task
+            deps = plan.dependencies.get(task_id, [])
+            if not deps:
                 entry_tasks.append(task_id)
-
+                
         return entry_tasks
 
     async def _execute_tool_task(
@@ -1665,7 +1669,7 @@ Provide a comprehensive analysis including:
                 prompt=prompt,
                 system_prompt=system_prompt,
                 temperature=0.7,
-                max_tokens=2000,
+                max_tokens=4000,
             )
 
             execution_time = asyncio.get_event_loop().time() - start_time
@@ -2091,6 +2095,38 @@ Provide accurate and useful responses that build on the ongoing discussion.
                     return result_data
 
         return None
+    
+    def _resolve_parameters(self, parameters: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+        """Resolve parameter placeholders (e.g., '{{ task_1.result }}') using context"""
+        resolved = parameters.copy()
+        
+        for key, value in resolved.items():
+            if isinstance(value, str) and "{{" in value and "}}" in value:
+                if value.strip().startswith("{{") and value.strip().endswith("}}"):
+                    var_path = value.strip()[2:-2].strip()
+                    resolved_value = self._get_context_value(var_path, context)
+                    
+                    if resolved_value is not None:
+                        resolved[key] = resolved_value
+                        logger.debug(f"Resolved parameter {key}: {var_path} -> value of length {len(str(resolved_value))}")
+                    else:
+                        logger.warning(f"Could not resolve parameter {key}: {var_path}")
+        
+        return resolved
+
+    def _get_context_value(self, path: str, context: Dict[str, Any]) -> Any:
+        """Navigate dot notation in context"""
+        parts = path.split(".")
+        current = context
+        try:
+            for part in parts:
+                if isinstance(current, dict) and part in current:
+                    current = current[part]
+                else:
+                    return None
+            return current
+        except Exception:
+            return None
 
     async def _synthesize_coherent_response(
         self,
@@ -2119,6 +2155,13 @@ Provide accurate and useful responses that build on the ongoing discussion.
                     content = str(result_data["data"])
             elif isinstance(result_data, str):
                 content = result_data
+
+            if content is not None and not isinstance(content, str):
+                content = str(content)
+            
+            # Fallback: If result is a dict but we couldn't extract specific fields, use the whole dict
+            if content is None and result_data:
+                content = str(result_data)
 
             if content and not content.startswith("Tool") and len(content) > 10:
                 gathered_info.append(

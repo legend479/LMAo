@@ -201,6 +201,12 @@ class EmbeddingManager:
             self.embedding_stats["domain_model_usage"] += 1
         elif include_domain:
             # Use general model embedding for domain if they're the same
+            if general_embedding is None:
+                general_embedding = await self._generate_single_embedding(
+                    text, self.general_model, "general"
+                )
+                # Note: We don't increment general_model_usage here as it's a fallback
+                
             domain_embedding = general_embedding
             self.embedding_stats["domain_model_usage"] += 1
 

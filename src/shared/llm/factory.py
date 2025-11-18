@@ -145,7 +145,7 @@ def _add_env_providers(providers: Dict[str, Dict[str, Any]]) -> None:
     if google_key and "google" not in providers:
         providers["google"] = {
             "api_key": google_key,
-            "model": os.getenv("GOOGLE_MODEL", "gemini-2.5-flash "),
+            "model": os.getenv("GOOGLE_MODEL", "gemini-1.5-flash "),
             "base_url": os.getenv("GOOGLE_BASE_URL"),
         }
 
