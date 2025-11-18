@@ -98,6 +98,15 @@ class MetricsCollector:
 
                 logger.info("Metrics server started", port=self.settings.metrics_port)
 
+            except OSError as e:
+                if e.errno == 98:  # Address already in use
+                    logger.warning(
+                        f"Metrics server port {self.settings.metrics_port} is busy (likely occupied by another worker). Skipping."
+                    )
+                    # Mark as started so we don't keep retrying and filling logs
+                    self._server_started = True
+                else:
+                    logger.error("Failed to start metrics server", error=str(e))
             except Exception as e:
                 logger.error("Failed to start metrics server", error=str(e))
         else:

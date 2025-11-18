@@ -17,7 +17,7 @@ logger = get_logger(__name__)
 class ServiceClient:
     """Base HTTP client for service communication"""
 
-    def __init__(self, base_url: str, timeout: int = 30):
+    def __init__(self, base_url: str, timeout: int = 120):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self._client: Optional[httpx.AsyncClient] = None
@@ -59,7 +59,7 @@ class AgentServiceClient(ServiceClient):
     def __init__(self):
         settings = get_settings()
         base_url = f"http://{settings.agent_host}:{settings.agent_port}"
-        super().__init__(base_url)
+        super().__init__(base_url, timeout=180)
 
     async def process_message(
         self, message: str, session_id: str, user_id: Optional[str] = None
@@ -120,7 +120,7 @@ class RAGServiceClient(ServiceClient):
     def __init__(self):
         settings = get_settings()
         base_url = f"http://{settings.rag_host}:{settings.rag_port}"
-        super().__init__(base_url)
+        super().__init__(base_url, timeout=180)
 
     async def search(
         self,

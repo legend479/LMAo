@@ -16,6 +16,7 @@ import torch
 
 from ..shared.logging import get_logger
 
+os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = "300"
 logger = get_logger(__name__)
 
 

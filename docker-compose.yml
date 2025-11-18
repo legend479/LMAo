@@ -18,6 +18,11 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - ELASTICSEARCH_HOST=elasticsearch
       - ELASTICSEARCH_PORT=9200
+      - AGENT_HOST=agent-server
+      - AGENT_PORT=8001
+      - RAG_HOST=rag-pipeline
+      - RAG_PORT=8002
+      - METRICS_PORT=9091
       - PYTHONUNBUFFERED=1
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     depends_on:
@@ -65,6 +70,7 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - ELASTICSEARCH_HOST=elasticsearch
       - ELASTICSEARCH_PORT=9200
+      - METRICS_PORT=9092
       - PYTHONUNBUFFERED=1
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - LLM_PROVIDER=${LLM_PROVIDER:-openai}

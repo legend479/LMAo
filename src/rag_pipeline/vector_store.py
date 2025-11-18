@@ -3,6 +3,7 @@ Elasticsearch Vector Store
 Vector database implementation using Elasticsearch with hybrid search support
 """
 
+import os
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 from datetime import datetime
@@ -58,8 +59,17 @@ class ElasticsearchConfig:
 
     def __post_init__(self):
         if self.hosts is None:
-            # Default to http://localhost:9200 with proper scheme
-            self.hosts = ["http://localhost:9200"]
+            # CHANGED: Read from Environment Variables first, then default to localhost
+            es_host = os.getenv("ELASTICSEARCH_HOST", "localhost")
+            es_port = os.getenv("ELASTICSEARCH_PORT", "9200")
+
+            # Handle cases where ELASTICSEARCH_HOST might include http/https
+            if es_host.startswith("http://") or es_host.startswith("https://"):
+                self.hosts = [f"{es_host}:{es_port}"]
+            else:
+                self.hosts = [f"http://{es_host}:{es_port}"]
+
+            logger.info(f"Configured Elasticsearch hosts: {self.hosts}")
 
 
 class ElasticsearchStore:

@@ -1,19 +1,28 @@
 # LMA-o : Learning-Material Agent (omni)
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![Docker](https://img.shields.io/badge/docker-ready-brightgreen.svg)](https://www.docker.com/)
+[![Documentation](https://img.shields.io/badge/docs-complete-success.svg)](./docs/)
+
 ## Authors
-* Raveesh Vyas
-* Prakhar Singhal
+* **Raveesh Vyas**
+* **Prakhar Singhal**
 
+---
 
-A sophisticated AI-powered software engineering assistant with multi-provider LLM support, advanced RAG capabilities, and comprehensive tool integration.
+A sophisticated AI-powered software engineering assistant combining multi-provider LLM support, advanced RAG capabilities, and comprehensive tool integration. Built with modern microservices architecture for scalability and reliability.
 
-## 🚀 Features
+## 🌟 Key Highlights
 
-- **Multi-Provider LLM Support**: OpenAI, Anthropic (Claude), Google AI (Gemini), and Ollama (local deployment)
-- **Advanced RAG Pipeline**: Intelligent document processing and retrieval
-- **Agentic Workflows**: LangGraph-powered task orchestration
-- **Comprehensive Tool Integration**: Code execution, analysis, and automation
-- **Real-time Chat Interface**: WebSocket-based communication
-- **Scalable Architecture**: Microservices with Docker deployment
+- **🤖 Multi-Provider LLM Support**: Seamlessly switch between OpenAI, Anthropic (Claude), Google AI (Gemini), and Ollama (local deployment)
+- **📚 Advanced RAG Pipeline**: Hybrid search with dual embedding models, query reformulation, and intelligent reranking
+- **🔄 Agentic Workflows**: LangGraph-powered stateful orchestration with dynamic tool selection
+- **🛠️ Comprehensive Tool Integration**: 10+ built-in tools including code execution, document generation, and email automation
+- **💬 Real-time Chat Interface**: WebSocket-based communication with streaming responses
+- **🏗️ Scalable Architecture**: Microservices design with Docker Compose orchestration
+- **📊 Production-Ready**: Complete monitoring, logging, and observability stack
+- **🔒 Enterprise Security**: JWT authentication, RBAC, rate limiting, and input validation
 
 ## 🤖 Supported LLM Providers
 
@@ -82,10 +91,25 @@ LLM_MODEL=llama2
 
 ## 📚 Documentation
 
-- [LLM Integration Guide](docs/LLM_INTEGRATION.md) - Comprehensive guide for LLM usage
-- [Quick Setup Guide](QUICK_SETUP_GUIDE.md) - Fast deployment instructions
-- [System Documentation](SYSTEM_DOCUMENTATION.md) - Architecture and design
-- [Design and Organization](DESIGN_AND_ORGANIZATION.md) - System design philosophy
+### 📑 [Documentation Index](docs/INDEX.md) - Complete documentation navigation
+
+### Core Documentation
+- **[Complete System Overview](docs/COMPLETE_SYSTEM_OVERVIEW.md)** - Comprehensive system architecture and features
+- **[Technical Architecture](docs/TECHNICAL_ARCHITECTURE.md)** - Detailed technical design and data flows
+- **[Features and Capabilities](docs/FEATURES_AND_CAPABILITIES.md)** - Complete feature documentation
+- **[API Reference](docs/API_REFERENCE.md)** - Complete API documentation with examples
+- **[Deployment Guide](docs/DEPLOYMENT_GUIDE.md)** - Production deployment and configuration
+- **[Developer Guide](docs/DEVELOPER_GUIDE.md)** - Development setup and contribution guidelines
+
+### Specialized Guides
+- **[LLM Integration Guide](docs/LLM_INTEGRATION.md)** - Multi-provider LLM usage and configuration
+- **[Architecture Design](docs/Architecture.md)** - System design philosophy and patterns
+
+### Quick Links
+- [Installation Guide](docs/DEPLOYMENT_GUIDE.md#quick-start)
+- [API Authentication](docs/API_REFERENCE.md#authentication)
+- [Development Setup](docs/DEVELOPER_GUIDE.md#development-setup)
+- [Troubleshooting](docs/DEPLOYMENT_GUIDE.md#troubleshooting)
 
 ## 🛠️ Usage Examples
 
@@ -126,28 +150,72 @@ async for chunk in stream_text(
     print(chunk, end="", flush=True)
 ```
 
-## 🏗️ Architecture
+## 🏗️ System Architecture
 
 ```
-┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
-│   Web UI        │────│   API Server     │────│  Agent Server   │
-│   (React)       │    │   (FastAPI)      │    │  (LangGraph)    │
-└─────────────────┘    └──────────────────┘    └─────────────────┘
-                                │                        │
-                       ┌──────────────────┐    ┌─────────────────┐
-                       │  RAG Pipeline    │    │  LLM Providers  │
-                       │ (Elasticsearch)  │    │ Multi-Provider  │
-                       └──────────────────┘    └─────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│                         User Interface Layer                     │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐         │
+│  │  Web UI      │  │  CLI Tools   │  │  API Clients │         │
+│  │  (React)     │  │  (Python)    │  │  (REST/WS)   │         │
+│  └──────────────┘  └──────────────┘  └──────────────┘         │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                      API Gateway (FastAPI)                       │
+│  Authentication • Rate Limiting • Validation • WebSocket         │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                ┌─────────────┴─────────────┐
+                ▼                           ▼
+┌──────────────────────────┐  ┌──────────────────────────┐
+│   Agent Server           │  │   RAG Pipeline           │
+│   (LangGraph)            │  │   (Elasticsearch)        │
+│  • Task Planning         │  │  • Document Processing   │
+│  • Tool Orchestration    │  │  • Hybrid Search         │
+│  • Memory Management     │  │  • Context Optimization  │
+│  • Error Recovery        │  │  • Reranking             │
+└──────────────────────────┘  └──────────────────────────┘
+                │                           │
+                └─────────────┬─────────────┘
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    Data & Storage Layer                          │
+│  PostgreSQL • Redis • Elasticsearch • Prometheus • Grafana       │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-## 🔍 Key Components
+### Microservices
+- **API Server** (Port 8000): REST API and WebSocket gateway
+- **Agent Server** (Port 8001): LangGraph orchestration engine
+- **RAG Pipeline** (Port 8002): Document processing and retrieval
+- **Web UI** (Port 3000): React-based user interface
+- **PostgreSQL** (Port 5432): Relational database
+- **Redis** (Port 6379): Caching and session storage
+- **Elasticsearch** (Port 9200): Vector database and search
+- **Prometheus** (Port 9090): Metrics collection
+- **Grafana** (Port 3001): Monitoring dashboards
 
-- **API Server**: FastAPI-based REST API and WebSocket gateway
-- **Agent Server**: LangGraph orchestration with multi-provider LLM support
-- **RAG Pipeline**: Elasticsearch-powered document processing and retrieval
-- **LLM Integration**: Unified interface for OpenAI, Anthropic, Google AI, and Ollama
-- **Web UI**: React-based user interface
-- **Tool Registry**: Extensible tool system for various tasks
+## 🔍 Core Components
+
+### Backend Services
+- **API Server** (`src/api_server/`): FastAPI gateway with authentication, rate limiting, and WebSocket support
+- **Agent Server** (`src/agent_server/`): LangGraph orchestration with task planning and tool execution
+- **RAG Pipeline** (`src/rag_pipeline/`): Elasticsearch-powered hybrid search with dual embeddings
+- **LLM Integration** (`src/shared/llm/`): Unified interface for multiple LLM providers
+
+### Frontend
+- **Web UI** (`ui/`): React + TypeScript with Material-UI, Redux, and real-time WebSocket
+
+### Data Layer
+- **PostgreSQL**: User data, sessions, conversations, and system metrics
+- **Redis**: Caching, rate limiting, and session storage
+- **Elasticsearch**: Vector database with hybrid search capabilities
+
+### Monitoring
+- **Prometheus**: Metrics collection and alerting
+- **Grafana**: Visualization dashboards and analytics
 
 ## 🚦 Health Check
 
@@ -173,9 +241,22 @@ curl -X POST http://localhost:8000/api/v1/chat/message \
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🆘 Support
+## 🆘 Support and Resources
 
-- Check [LLM Integration Guide](docs/LLM_INTEGRATION.md) for LLM-specific issues
-- Run `python test_llm_integration.py` to diagnose problems
-- Review logs for detailed error information
-- See [Troubleshooting](docs/LLM_INTEGRATION.md#troubleshooting) section
+### Documentation
+- **[Documentation Index](docs/INDEX.md)** - Navigate all documentation
+- **[Troubleshooting Guide](docs/DEPLOYMENT_GUIDE.md#troubleshooting)** - Common issues and solutions
+- **[LLM Integration Guide](docs/LLM_INTEGRATION.md)** - LLM-specific issues
+- **[API Reference](docs/API_REFERENCE.md)** - API usage and examples
+
+### Getting Help
+- **Issues**: [GitHub Issues](https://github.com/yourusername/LMAo/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/yourusername/LMAo/discussions)
+- **Diagnostics**: Run `python test_llm_integration.py` to diagnose LLM issues
+- **Logs**: Check `logs/` directory for detailed error information
+
+### Community
+- Star the project on GitHub
+- Share your use cases and feedback
+- Contribute to documentation
+- Report bugs and suggest features

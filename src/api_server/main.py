@@ -269,10 +269,21 @@ def create_app() -> FastAPI:
             allowed_hosts=["*"],  # Configure appropriately for production
         )
 
+    origins = settings.allowed_origins
+    if isinstance(origins, list):
+        origins.extend(
+            [
+                "http://172.28.0.1:3000",  # Common Docker gateway
+                "http://localhost:3000",
+                "http://127.0.0.1:3000",
+                "http://web-ui:3000",
+            ]
+        )
+
     # Add CORS middleware with enhanced configuration
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.allowed_origins,
+        allow_origins=origins,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
         allow_headers=["*"],
