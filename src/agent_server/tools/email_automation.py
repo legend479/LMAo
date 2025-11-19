@@ -709,7 +709,7 @@ Always include:
                 prompt=prompt,
                 system_prompt=system_prompt,
                 temperature=0.7,
-                max_tokens=500,
+                max_tokens=4000,
             )
 
             # Clean up the content

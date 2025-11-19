@@ -49,10 +49,10 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
 
 # Run with production settings
 CMD ["python", "-m", "uvicorn", "src.agent_server.main:app", \
-     "--host", "0.0.0.0", \
-     "--port", "8001", \
-     "--workers", "2", \
-     "--loop", "uvloop", \
-     "--http", "httptools", \
-     "--log-level", "info", \
-     "--no-use-colors"]
+    "--host", "0.0.0.0", \
+    "--port", "8001", \
+    "--workers", "1", \
+    "--loop", "uvloop", \
+    "--http", "httptools", \
+    "--log-level", "info", \
+    "--no-use-colors"]

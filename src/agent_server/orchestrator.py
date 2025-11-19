@@ -2763,6 +2763,8 @@ YOUR TASK:
 - Be warm, friendly, and clear
 - Speak in first person ("I generated...", "I sent...", "I created...")
 - Make the user feel confident that their request was handled properly
+- Make sure to include any relevant context from the execution flow like code generated and document created
+- Highly Critical that you fullfill the User's request completly and to the best of your  ability without leaving out any details
 
 CRITICAL RULES:
 1. Explain the ENTIRE process you went through, not just the final result
@@ -2886,9 +2888,8 @@ Now, explain to the user in a natural, conversational way what you did to fulfil
             if info.get("metadata"):
                 meta = info["metadata"]
                 if "recipients" in meta and meta["recipients"]:
-                    response_parts.append(
-                        f"\nEmail sent to: {', '.join(meta['recipients'])}"
-                    )
+                    recipients_str = ", ".join(meta["recipients"])
+                    response_parts.append(f"\nEmail sent to: {recipients_str}")
                 if "filename" in meta:
                     response_parts.append(f"\nCreated file: {meta['filename']}")
 
@@ -2906,9 +2907,8 @@ Now, explain to the user in a natural, conversational way what you did to fulfil
                 if info.get("metadata"):
                     meta = info["metadata"]
                     if "recipients" in meta and meta["recipients"]:
-                        response_parts.append(
-                            f"   → Sent to: {', '.join(meta['recipients'][:2])}"
-                        )
+                        recipients_str = ", ".join(meta["recipients"][:2])
+                        response_parts.append(f"   → Sent to: {recipients_str}")
                     if "filename" in meta:
                         response_parts.append(f"   → File: {meta['filename']}")
 
