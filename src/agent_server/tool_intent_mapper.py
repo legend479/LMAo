@@ -622,12 +622,66 @@ Respond with a JSON object containing:
             if email_match:
                 parameters["recipients"] = [email_match.group(1)]
 
-            # Extract subject
+            # Extract subject - try multiple patterns
             subject_match = re.search(
                 r'subject[:\s]+["\']?([^"\']+)["\']?', message, re.IGNORECASE
             )
             if subject_match:
                 parameters["subject"] = subject_match.group(1).strip()
+            else:
+                # Try to extract from "with subject X" pattern
+                subject_match = re.search(
+                    r'with\s+subject\s+["\']?([^"\']+?)["\']?\s+(?:and|saying|with)',
+                    message,
+                    re.IGNORECASE,
+                )
+                if subject_match:
+                    parameters["subject"] = subject_match.group(1).strip()
+
+            # Extract body content - CRITICAL FIX
+            # Pattern 1: "saying X" or "that says X"
+            body_match = re.search(
+                r'(?:saying|says|message|body)[:\s]+["\']?(.+?)(?:["\']|$)',
+                message,
+                re.IGNORECASE,
+            )
+            if body_match:
+                body_text = body_match.group(1).strip()
+                # Clean up common trailing words
+                body_text = re.sub(
+                    r"\s+(?:to|and|with|about)\s+[a-zA-Z0-9._%+-]+@.*$",
+                    "",
+                    body_text,
+                    flags=re.IGNORECASE,
+                )
+                parameters["body"] = body_text
+
+            # Pattern 2: "with body X" or "with message X"
+            if "body" not in parameters:
+                body_match = re.search(
+                    r'with\s+(?:body|message|text)[:\s]+["\']?(.+?)(?:["\']|$)',
+                    message,
+                    re.IGNORECASE,
+                )
+                if body_match:
+                    parameters["body"] = body_match.group(1).strip()
+
+            # Pattern 3: Extract everything after "saying" or "about"
+            if "body" not in parameters:
+                # Look for patterns like "email X saying Y" or "email X about Y"
+                body_match = re.search(
+                    r"(?:saying|about|regarding)\s+(.+?)(?:\s+to\s+[a-zA-Z0-9._%+-]+@|$)",
+                    message,
+                    re.IGNORECASE,
+                )
+                if body_match:
+                    parameters["body"] = body_match.group(1).strip()
+
+            # If still no body, mark for LLM generation
+            if "body" not in parameters or not parameters["body"]:
+                parameters["_needs_content_generation"] = True
+                # Store the original message for context
+                parameters["_original_message"] = message
 
         elif tool_name == "document_generation":
             # Extract format

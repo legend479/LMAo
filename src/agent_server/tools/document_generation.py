@@ -1148,23 +1148,158 @@ class DocumentGenerationTool(BaseTool):
         normal_style,
         code_style,
     ):
-        """Add formatted content to PDF story"""
+        """Add formatted content to PDF story with enhanced markdown support"""
 
         lines = content.split("\n")
+        in_code_block = False
+        code_block_lines = []
+        in_list = False
+        list_items = []
 
         for line in lines:
-            line = line.strip()
-            if not line:
+            stripped = line.strip()
+
+            # Handle code blocks (```)
+            if stripped.startswith("```"):
+                if in_code_block:
+                    # End of code block - add accumulated code
+                    if code_block_lines:
+                        code_text = "\n".join(code_block_lines)
+                        # Escape special characters for reportlab
+                        code_text = (
+                            code_text.replace("&", "&amp;")
+                            .replace("<", "&lt;")
+                            .replace(">", "&gt;")
+                        )
+                        story.append(Paragraph(f"<pre>{code_text}</pre>", code_style))
+                        story.append(Spacer(1, 12))
+                    code_block_lines = []
+                    in_code_block = False
+                else:
+                    # Start of code block
+                    in_code_block = True
+                continue
+
+            if in_code_block:
+                code_block_lines.append(line)
+                continue
+
+            if not stripped:
+                # Empty line - add spacing
+                if in_list:
+                    # End of list
+                    self._add_list_to_story(story, list_items, normal_style)
+                    list_items = []
+                    in_list = False
                 story.append(Spacer(1, 6))
                 continue
 
-            # Check if line is part of a code block
+            # Handle markdown headings (##, ###, etc.)
+            if stripped.startswith("#"):
+                if in_list:
+                    self._add_list_to_story(story, list_items, normal_style)
+                    list_items = []
+                    in_list = False
+
+                heading_level = len(stripped) - len(stripped.lstrip("#"))
+                heading_text = stripped.lstrip("#").strip()
+
+                # Create heading style based on level
+                from reportlab.lib.styles import getSampleStyleSheet
+
+                styles = getSampleStyleSheet()
+
+                if heading_level == 1:
+                    heading_style = styles["Heading1"]
+                elif heading_level == 2:
+                    heading_style = styles["Heading2"]
+                elif heading_level == 3:
+                    heading_style = styles["Heading3"]
+                else:
+                    heading_style = styles["Heading4"]
+
+                story.append(Paragraph(heading_text, heading_style))
+                story.append(Spacer(1, 8))
+                continue
+
+            # Handle lists (-, *, •)
+            if stripped.startswith(("- ", "* ", "• ")):
+                list_text = stripped[2:].strip()
+                list_items.append(list_text)
+                in_list = True
+                continue
+
+            # Handle numbered lists (1., 2., etc.)
+            if re.match(r"^\d+\.\s+", stripped):
+                list_text = re.sub(r"^\d+\.\s+", "", stripped)
+                list_items.append(list_text)
+                in_list = True
+                continue
+
+            # End list if we hit non-list content
+            if in_list:
+                self._add_list_to_story(story, list_items, normal_style)
+                list_items = []
+                in_list = False
+
+            # Handle inline code (`code`)
+            if "`" in stripped:
+                stripped = self._format_inline_code(stripped)
+
+            # Handle bold (**text** or __text__)
+            stripped = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", stripped)
+            stripped = re.sub(r"__(.+?)__", r"<b>\1</b>", stripped)
+
+            # Handle italic (*text* or _text_)
+            stripped = re.sub(r"\*(.+?)\*", r"<i>\1</i>", stripped)
+            stripped = re.sub(r"_(.+?)_", r"<i>\1</i>", stripped)
+
+            # Check if line is code (indented or has code indicators)
             if self._is_code_line(line, content_structure):
-                story.append(Paragraph(line, code_style))
+                # Escape special characters
+                stripped = (
+                    stripped.replace("&", "&amp;")
+                    .replace("<", "&lt;")
+                    .replace(">", "&gt;")
+                )
+                story.append(Paragraph(stripped, code_style))
             else:
-                story.append(Paragraph(line, normal_style))
+                story.append(Paragraph(stripped, normal_style))
 
             story.append(Spacer(1, 6))
+
+        # Handle any remaining list items
+        if in_list and list_items:
+            self._add_list_to_story(story, list_items, normal_style)
+
+    def _format_inline_code(self, text: str) -> str:
+        """Format inline code with monospace font"""
+        # Replace `code` with <font name="Courier">code</font>
+        return re.sub(r"`([^`]+)`", r'<font name="Courier" size="10">\1</font>', text)
+
+    def _add_list_to_story(self, story: List, items: List[str], style):
+        """Add a formatted list to the PDF story"""
+        from reportlab.platypus import ListFlowable, ListItem
+        from reportlab.lib.styles import ParagraphStyle
+
+        # Create list items
+        list_items = []
+        for item in items:
+            # Handle inline formatting in list items
+            if "`" in item:
+                item = self._format_inline_code(item)
+            item = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", item)
+            item = re.sub(r"__(.+?)__", r"<b>\1</b>", item)
+            item = re.sub(r"\*(.+?)\*", r"<i>\1</i>", item)
+
+            list_items.append(Paragraph(f"• {item}", style))
+
+        # Add list items to story
+        for item in list_items:
+            story.append(item)
+            story.append(Spacer(1, 4))
+
+        story.append(Spacer(1, 6))
 
     def _format_content_for_slide(
         self, content: str, content_structure: ContentStructure

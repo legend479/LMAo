@@ -634,6 +634,81 @@ async def get_session_info(
     }
 
 
+class CreateSessionRequest(BaseModel):
+    title: Optional[str] = None
+
+
+class UpdateSessionRequest(BaseModel):
+    title: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+@router.post("/sessions", response_model=ChatSession)
+async def create_session(
+    request: CreateSessionRequest, current_user: User = Depends(get_current_active_user)
+):
+    """Create a new chat session for the current user"""
+
+    session_manager = get_session_manager()
+    session_info = await session_manager.create_session(
+        user_id=current_user.id, session_type="conversation", title=request.title
+    )
+
+    return ChatSession(
+        session_id=session_info.session_id,
+        user_id=session_info.user_id,
+        created_at=session_info.created_at,
+        last_activity=session_info.last_activity,
+        message_count=len(session_info.context.get("messages", [])),
+        status="active" if session_info.is_active else "inactive",
+    )
+
+
+@router.patch("/sessions/{session_id}")
+async def update_session(
+    session_id: str,
+    update: UpdateSessionRequest,
+    current_user: User = Depends(get_current_active_user),
+):
+    """Update session metadata (title, active flag)"""
+
+    session_manager = get_session_manager()
+    session_info = await session_manager.get_session(session_id)
+
+    if not session_info:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if session_info.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Session access denied")
+
+    # Update in-memory metadata
+    if update.title:
+        session_info.metadata["title"] = update.title
+
+    if update.is_active is not None:
+        session_info.is_active = update.is_active
+
+    # Persist title change to database (if present)
+    try:
+        from src.shared.database.connection import database_session_scope
+        from src.shared.database.models import Session as DBSession
+
+        with database_session_scope() as db_session:
+            db_obj = db_session.query(DBSession).filter_by(id=session_id).first()
+            if db_obj:
+                if update.title is not None:
+                    db_obj.title = update.title
+                if update.is_active is not None:
+                    db_obj.is_active = update.is_active
+    except Exception as e:
+        logger.error(f"Failed to persist session update: {e}")
+
+    return {
+        "message": "Session updated",
+        "session_id": session_id,
+    }
+
+
 @router.get("/sessions/{session_id}/history")
 async def get_chat_history(
     session_id: str,

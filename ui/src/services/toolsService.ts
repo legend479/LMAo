@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { ApiResponse } from '../types';
 
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000/api';
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000/api/v1';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -38,7 +38,7 @@ export interface ToolExecutionResult {
 export const toolsService = {
   async listTools(): Promise<ApiResponse<ToolSummary[]>> {
     try {
-      const response = await api.get<ToolSummary[]>('/v1/tools');
+      const response = await api.get<ToolSummary[]>('/tools');
       return {
         success: true,
         data: response.data,
@@ -53,7 +53,7 @@ export const toolsService = {
 
   async executeTool(toolName: string, parameters: Record<string, any> = {}): Promise<ApiResponse<ToolExecutionResult>> {
     try {
-      const response = await api.post<ToolExecutionResult>(`/v1/tools/${toolName}/execute`, {
+      const response = await api.post<ToolExecutionResult>(`/tools/${toolName}/execute`, {
         parameters,
       });
       return {

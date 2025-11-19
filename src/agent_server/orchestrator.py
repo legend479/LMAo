@@ -2510,34 +2510,95 @@ Provide accurate and useful responses that build on the ongoing discussion.
         """Resolve parameter placeholders (e.g., '{{ task_1.result }}') using context"""
         resolved = parameters.copy()
 
+        logger.debug(f"Resolving parameters with context keys: {list(context.keys())}")
+
         for key, value in resolved.items():
             if isinstance(value, str) and "{{" in value and "}}" in value:
                 if value.strip().startswith("{{") and value.strip().endswith("}}"):
                     var_path = value.strip()[2:-2].strip()
+                    logger.debug(
+                        f"Attempting to resolve parameter '{key}' with path '{var_path}'"
+                    )
                     resolved_value = self._get_context_value(var_path, context)
 
                     if resolved_value is not None:
                         resolved[key] = resolved_value
-                        logger.debug(
-                            f"Resolved parameter {key}: {var_path} -> value of length {len(str(resolved_value))}"
+                        logger.info(
+                            f"✓ Resolved parameter '{key}': {var_path} -> value of type {type(resolved_value).__name__} and length {len(str(resolved_value))}"
                         )
                     else:
-                        logger.warning(f"Could not resolve parameter {key}: {var_path}")
+                        logger.warning(
+                            f"✗ Could not resolve parameter '{key}': {var_path} (context keys: {list(context.keys())})"
+                        )
+            elif isinstance(value, list):
+                # Handle lists that might contain placeholders (e.g., attachments)
+                resolved_list = []
+                for item in value:
+                    if isinstance(item, str) and "{{" in item and "}}" in item:
+                        if item.strip().startswith("{{") and item.strip().endswith(
+                            "}}"
+                        ):
+                            var_path = item.strip()[2:-2].strip()
+                            logger.debug(
+                                f"Attempting to resolve list item in '{key}' with path '{var_path}'"
+                            )
+                            resolved_value = self._get_context_value(var_path, context)
+                            if resolved_value is not None:
+                                resolved_list.append(resolved_value)
+                                logger.info(
+                                    f"✓ Resolved list item in '{key}': {var_path} -> {resolved_value}"
+                                )
+                            else:
+                                logger.warning(
+                                    f"✗ Could not resolve list item in '{key}': {var_path}"
+                                )
+                                resolved_list.append(
+                                    item
+                                )  # Keep original if can't resolve
+                        else:
+                            resolved_list.append(item)
+                    else:
+                        resolved_list.append(item)
+                if resolved_list != value:
+                    resolved[key] = resolved_list
 
+        logger.debug(
+            f"Parameter resolution complete. Resolved keys: {list(resolved.keys())}"
+        )
         return resolved
 
     def _get_context_value(self, path: str, context: Dict[str, Any]) -> Any:
         """Navigate dot notation in context"""
         parts = path.split(".")
         current = context
+
+        logger.debug(f"Navigating path '{path}' with {len(parts)} parts")
+
         try:
-            for part in parts:
+            for i, part in enumerate(parts):
+                logger.debug(
+                    f"  Step {i+1}/{len(parts)}: Looking for '{part}' in {type(current).__name__}"
+                )
+
                 if isinstance(current, dict) and part in current:
                     current = current[part]
+                    logger.debug(
+                        f"  Found '{part}' -> type: {type(current).__name__}, "
+                        f"keys: {list(current.keys()) if isinstance(current, dict) else 'N/A'}"
+                    )
                 else:
+                    logger.warning(
+                        f"  Path navigation failed at '{part}'. "
+                        f"Available keys: {list(current.keys()) if isinstance(current, dict) else 'N/A'}"
+                    )
                     return None
+
+            logger.debug(
+                f"Successfully resolved path '{path}' to value of type {type(current).__name__}"
+            )
             return current
-        except Exception:
+        except Exception as e:
+            logger.error(f"Exception during path navigation for '{path}': {e}")
             return None
 
     async def _synthesize_coherent_response(
@@ -2546,18 +2607,42 @@ Provide accurate and useful responses that build on the ongoing discussion.
         tool_results: List[Dict[str, Any]],
         final_state: Dict[str, Any],
     ) -> str:
-        """Synthesize a coherent response using LLM that directly answers the original query"""
+        """Synthesize a coherent response using LLM that explains the entire agentic flow conversationally"""
 
         # Gather all relevant information from tool results with enhanced extraction
         gathered_info = []
+        execution_flow = []  # Track the flow of operations
+
         for i, tool_result in enumerate(tool_results):
             task_id = tool_result.get("task_id", f"task_{i}")
             result_data = tool_result.get("result", {})
             tool_name = tool_result.get("tool", "unknown")
 
+            # Track execution flow for narrative
+            execution_flow.append(
+                {
+                    "step": i + 1,
+                    "task_id": task_id,
+                    "tool": tool_name,
+                    "action": self._describe_tool_action(tool_name, result_data),
+                }
+            )
+
             # Extract meaningful content with multiple fallback strategies
             content = None
+            metadata = {}
+
             if isinstance(result_data, dict):
+                # Extract metadata for context
+                if "recipients_sent" in result_data:
+                    metadata["recipients"] = result_data.get("recipients_sent", [])
+                    metadata["success_count"] = result_data.get("success_count", 0)
+                if "file_path" in result_data:
+                    metadata["file_path"] = result_data.get("file_path")
+                    metadata["filename"] = result_data.get("filename")
+                if "format" in result_data:
+                    metadata["format"] = result_data.get("format")
+
                 # Try standard fields first
                 content = (
                     result_data.get("result")
@@ -2573,6 +2658,12 @@ Provide accurate and useful responses that build on the ongoing discussion.
                     if isinstance(data, str):
                         content = data
                     elif isinstance(data, dict):
+                        # Extract metadata from data
+                        if "recipients_sent" in data:
+                            metadata["recipients"] = data.get("recipients_sent", [])
+                        if "file_path" in data:
+                            metadata["file_path"] = data.get("file_path")
+
                         # Try to extract from nested data
                         content = (
                             data.get("result")
@@ -2590,6 +2681,7 @@ Provide accurate and useful responses that build on the ongoing discussion.
                         content = "\n\n".join(
                             [doc.get("content", "") for doc in docs[:3]]
                         )
+                        metadata["doc_count"] = len(docs)
 
             elif isinstance(result_data, str):
                 content = result_data
@@ -2617,6 +2709,7 @@ Provide accurate and useful responses that build on the ongoing discussion.
                             "task": task_id,
                             "tool": tool_name,
                             "content": content[:2000],  # Limit length
+                            "metadata": metadata,
                         }
                     )
                     logger.debug(
@@ -2628,41 +2721,78 @@ Provide accurate and useful responses that build on the ongoing discussion.
             logger.warning("No meaningful content extracted from tool results")
             return "I've processed your request, but I don't have enough information to provide a detailed answer. Could you please rephrase your question?"
 
-        # Build context for synthesis with tool information
+        # Build context for synthesis with tool information AND execution flow
         context_parts = []
+
+        # Add execution flow summary
+        if len(execution_flow) > 1:
+            context_parts.append("EXECUTION FLOW:")
+            for step_info in execution_flow:
+                context_parts.append(f"Step {step_info['step']}: {step_info['action']}")
+            context_parts.append("")
+
+        # Add detailed information from each step
+        context_parts.append("DETAILED RESULTS:")
         for i, info in enumerate(gathered_info, 1):
-            context_parts.append(f"Source {i} ({info['tool']}):\n{info['content']}\n")
+            tool_desc = self._get_tool_description(info["tool"])
+            context_parts.append(f"\nStep {i} - {tool_desc}:")
+
+            # Add metadata if available
+            if info.get("metadata"):
+                meta = info["metadata"]
+                if "recipients" in meta:
+                    context_parts.append(
+                        f"  Recipients: {', '.join(meta['recipients'])}"
+                    )
+                if "filename" in meta:
+                    context_parts.append(f"  File: {meta['filename']}")
+                if "format" in meta:
+                    context_parts.append(f"  Format: {meta['format']}")
+
+            context_parts.append(f"  Result: {info['content']}\n")
 
         context_text = "\n".join(context_parts)
 
-        # Create enhanced synthesis prompt with stronger directives
-        system_prompt = """You are a knowledgeable AI assistant. Your task is to answer the user's question using ONLY the information provided in the sources below.
+        # Create enhanced synthesis prompt that encourages narrative explanation
+        system_prompt = """You are a helpful AI assistant that explains what you did to help the user in a natural, conversational way.
+
+YOUR TASK:
+- Explain what you did to fulfill the user's request
+- Walk through the steps you took in a narrative, conversational manner
+- Mention specific details (like email addresses, file names, etc.) to show what was accomplished
+- Be warm, friendly, and clear
+- Speak in first person ("I generated...", "I sent...", "I created...")
+- Make the user feel confident that their request was handled properly
 
 CRITICAL RULES:
-1. Base your answer EXCLUSIVELY on the provided sources
-2. Directly answer the user's question - don't summarize sources
-3. Synthesize information from multiple sources into one coherent answer
-4. Speak naturally and conversationally
-5. Do NOT mention "sources", "tools", or "tasks" in your response
-6. If the sources don't contain enough information, say so clearly
-7. Do NOT make up or infer information not present in the sources
-8. Provide specific details, examples, and explanations from the sources
+1. Explain the ENTIRE process you went through, not just the final result
+2. Use the execution flow to create a narrative story
+3. Include specific details from the results (recipients, filenames, etc.)
+4. Be conversational and natural - avoid robotic language
+5. If multiple steps were involved, explain why each step was necessary
+6. End with a confirmation of what was accomplished
+7. Do NOT use phrases like "based on the sources" or "according to the information"
+8. Speak as if YOU performed these actions yourself
+
+EXAMPLES OF GOOD RESPONSES:
+- "I generated a comprehensive document about Python best practices and sent it to john@example.com. The document includes sections on code style, testing, and performance optimization."
+- "I created a detailed tutorial on React hooks, formatted it as a PDF document, and emailed it to sarah@company.com. The tutorial covers useState, useEffect, and custom hooks with practical examples."
+- "I sent an email to team@startup.com with a friendly greeting message. The email was delivered successfully."
 """
 
-        synthesis_prompt = f"""USER'S QUESTION: {original_query}
+        synthesis_prompt = f"""USER'S REQUEST: {original_query}
 
-AVAILABLE INFORMATION:
+WHAT I DID TO HELP:
 {context_text}
 
-TASK: Answer the user's question using the information above. Provide a direct, comprehensive answer that synthesizes all relevant information. Speak naturally as if you're explaining to a colleague.
-
-Your answer:"""
+Now, explain to the user in a natural, conversational way what you did to fulfill their request. Walk them through the process and confirm what was accomplished:"""
 
         logger.info(
-            "Synthesizing response with LLM",
+            "Synthesizing conversational response with full execution context",
             original_query=original_query[:100],
             context_length=len(context_text),
             sources_count=len(gathered_info),
+            execution_steps=len(execution_flow),
         )
 
         # Generate synthesized response with error handling
@@ -2696,6 +2826,45 @@ Your answer:"""
             logger.error(f"LLM synthesis failed: {e}, using fallback")
             return self._create_fallback_response(original_query, gathered_info)
 
+    def _describe_tool_action(self, tool_name: str, result_data: Dict[str, Any]) -> str:
+        """Generate a human-readable description of what a tool did"""
+
+        descriptions = {
+            "content_generation": "Generated content",
+            "document_generation": "Created document",
+            "email_automation": "Sent email",
+            "knowledge_retrieval": "Retrieved information",
+            "code_generation": "Generated code",
+            "compiler_runtime": "Executed code",
+        }
+
+        base_desc = descriptions.get(tool_name, f"Executed {tool_name}")
+
+        # Add specific details if available
+        if isinstance(result_data, dict):
+            if "format" in result_data:
+                base_desc += f" ({result_data['format']} format)"
+            elif isinstance(result_data.get("data"), dict):
+                data = result_data["data"]
+                if "format" in data:
+                    base_desc += f" ({data['format']} format)"
+
+        return base_desc
+
+    def _get_tool_description(self, tool_name: str) -> str:
+        """Get a user-friendly description of what a tool does"""
+
+        descriptions = {
+            "content_generation": "Content Generation",
+            "document_generation": "Document Creation",
+            "email_automation": "Email Delivery",
+            "knowledge_retrieval": "Information Retrieval",
+            "code_generation": "Code Generation",
+            "compiler_runtime": "Code Execution",
+        }
+
+        return descriptions.get(tool_name, tool_name.replace("_", " ").title())
+
     def _create_fallback_response(
         self, original_query: str, gathered_info: List[Dict[str, Any]]
     ) -> str:
@@ -2704,21 +2873,47 @@ Your answer:"""
         if not gathered_info:
             return "I apologize, but I encountered an issue processing your request. Could you please try rephrasing your question?"
 
-        # Extract the most relevant content
-        response_parts = [f"Based on your question: '{original_query[:100]}...'"]
+        # Extract the most relevant content with better formatting
+        response_parts = [f"I processed your request: '{original_query[:100]}...'\n"]
 
-        for i, info in enumerate(gathered_info[:2], 1):  # Use top 2 sources
+        # Build a narrative from the gathered info
+        if len(gathered_info) == 1:
+            info = gathered_info[0]
+            tool_desc = self._get_tool_description(info.get("tool", "unknown"))
+            response_parts.append(f"\nI used {tool_desc} to help you.")
+
+            # Add metadata if available
+            if info.get("metadata"):
+                meta = info["metadata"]
+                if "recipients" in meta and meta["recipients"]:
+                    response_parts.append(
+                        f"\nEmail sent to: {', '.join(meta['recipients'])}"
+                    )
+                if "filename" in meta:
+                    response_parts.append(f"\nCreated file: {meta['filename']}")
+
             content = info.get("content", "")
             if content and len(content) > 20:
-                # Truncate long content
-                truncated_content = (
-                    content[:300] + "..." if len(content) > 300 else content
-                )
-                response_parts.append(f"\n\nFrom source {i}:\n{truncated_content}")
+                truncated = content[:300] + "..." if len(content) > 300 else content
+                response_parts.append(f"\n\nResult:\n{truncated}")
+        else:
+            response_parts.append(f"\nI completed {len(gathered_info)} steps:")
+            for i, info in enumerate(gathered_info, 1):
+                tool_desc = self._get_tool_description(info.get("tool", "unknown"))
+                response_parts.append(f"\n{i}. {tool_desc}")
+
+                # Add key metadata
+                if info.get("metadata"):
+                    meta = info["metadata"]
+                    if "recipients" in meta and meta["recipients"]:
+                        response_parts.append(
+                            f"   → Sent to: {', '.join(meta['recipients'][:2])}"
+                        )
+                    if "filename" in meta:
+                        response_parts.append(f"   → File: {meta['filename']}")
 
         response_parts.append(
-            "\n\nI've gathered this information for you. "
-            "Would you like me to elaborate on any specific aspect?"
+            "\n\nYour request has been processed. Is there anything else you'd like me to help with?"
         )
 
         return "".join(response_parts)

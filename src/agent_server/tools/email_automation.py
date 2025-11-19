@@ -648,6 +648,99 @@ class EmailAutomationTool(BaseTool):
             templates_available=len(self.template_manager.templates),
         )
 
+    async def _generate_email_content(
+        self,
+        recipients: List[str],
+        subject: str,
+        original_message: str,
+        context: ExecutionContext,
+    ) -> str:
+        """Generate email body content using LLM when not provided"""
+        try:
+            # Import LLM integration
+            from src.shared.llm.integration import get_llm_integration
+
+            llm = await get_llm_integration()
+
+            # Build prompt for email content generation
+            prompt_parts = [
+                f"Generate a professional email body for the following request:",
+                f"Original request: {original_message}",
+            ]
+
+            if recipients:
+                prompt_parts.append(f"Recipient(s): {', '.join(recipients)}")
+
+            if subject:
+                prompt_parts.append(f"Subject: {subject}")
+
+            prompt_parts.extend(
+                [
+                    "",
+                    "Generate a clear, professional, and concise email body that:",
+                    "- Addresses the recipient appropriately",
+                    "- Conveys the intended message clearly",
+                    "- Maintains a professional tone",
+                    "- Includes appropriate greeting and closing",
+                    "- Is 2-4 paragraphs in length",
+                    "",
+                    "Email body:",
+                ]
+            )
+
+            prompt = "\n".join(prompt_parts)
+
+            system_prompt = """You are an expert email writer. Generate professional, clear, and concise email content.
+Your emails should be:
+- Professional and courteous
+- Clear and to the point
+- Well-structured with proper greeting and closing
+- Appropriate for business communication
+- Free of unnecessary jargon
+
+Always include:
+- A greeting (e.g., "Hello," or "Dear [Name],")
+- The main message body
+- A professional closing (e.g., "Best regards," or "Sincerely,")
+- Signature line"""
+
+            # Generate content
+            content = await llm.generate_response(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                temperature=0.7,
+                max_tokens=500,
+            )
+
+            # Clean up the content
+            content = content.strip()
+
+            # Ensure it has a greeting if missing
+            if not any(
+                content.lower().startswith(greeting)
+                for greeting in ["hello", "hi", "dear", "greetings"]
+            ):
+                content = f"Hello,\n\n{content}"
+
+            # Ensure it has a closing if missing
+            if not any(
+                closing in content.lower()
+                for closing in ["regards", "sincerely", "best", "thank you"]
+            ):
+                content = f"{content}\n\nBest regards,\nSE SME Agent"
+
+            logger.info(
+                "Successfully generated email content using LLM",
+                content_length=len(content),
+            )
+
+            return content
+
+        except Exception as e:
+            logger.error(f"Failed to generate email content with LLM: {e}")
+            # Return a basic fallback message
+            return f"Hello,\n\nThis is a message from SE SME Agent.\n\nBest regards,\nSE SME Agent"
+
     def _configure_from_environment(self):
         """Configure email providers from environment variables"""
 
@@ -729,24 +822,83 @@ class EmailAutomationTool(BaseTool):
         start_time = time.time()
 
         try:
-            # Extract parameters
-            print(parameters)
+            # Extract parameters with detailed logging
+            logger.info(
+                "Email tool received parameters",
+                param_keys=list(parameters.keys()),
+                has_body="body" in parameters,
+                has_content="content" in parameters,
+                has_subject="subject" in parameters,
+                needs_generation=parameters.get("_needs_content_generation", False),
+            )
+
             recipients = parameters["recipients"]
             subject = parameters.get("subject", "")
-            # FIX: Retrieve body content, defaulting to the 'body' parameter first.
+
+            # FIX: Retrieve body content with multiple fallback strategies
             body = parameters.get("body", "")
-            # Fallback: If 'body' is empty, check for a generic 'content' field, 
-            # often used by the orchestrator to pass generated text.
+            logger.debug(
+                f"Initial body extraction: body length = {len(body) if body else 0}"
+            )
+
+            # Fallback 1: Check for 'content' field (from content_generation task)
             if not body and "content" in parameters:
                 body = parameters["content"]
+                logger.info(
+                    f"Using 'content' parameter as body (length: {len(body) if body else 0})"
+                )
 
+            # Fallback 2: Try to parse concatenated subject/body
             if not body and subject and recipients and len(subject) > 10:
-                # Regex to extract the subject and body from the concatenated string
-                match = re.search(r'(?:as|with subject)\s+([\w\s]+?)\s+and body\s+as\s+(.*)', subject, re.IGNORECASE)
+                match = re.search(
+                    r"(?:as|with subject)\s+([\w\s]+?)\s+and body\s+as\s+(.*)",
+                    subject,
+                    re.IGNORECASE,
+                )
                 if match:
                     subject = match.group(1).strip()
                     body = match.group(2).strip()
-                    logger.info("Successfully re-parsed concatenated subject/body parameters.")
+                    logger.info(
+                        "Successfully re-parsed concatenated subject/body parameters."
+                    )
+
+            # Fallback 3: Generate content using LLM if marked for generation
+            if not body and parameters.get("_needs_content_generation"):
+                logger.info("Generating email body content using LLM")
+                body = await self._generate_email_content(
+                    recipients=recipients,
+                    subject=subject,
+                    original_message=parameters.get("_original_message", ""),
+                    context=context,
+                )
+                logger.info(f"LLM-generated email body (length: {len(body)})")
+
+            # Fallback 4: Use original message as body if still empty
+            if not body and "_original_message" in parameters:
+                original_msg = parameters["_original_message"]
+                # Extract the message intent
+                body_match = re.search(
+                    r"(?:saying|about|regarding)\s+(.+?)(?:\s+to\s+|$)",
+                    original_msg,
+                    re.IGNORECASE,
+                )
+                if body_match:
+                    body = body_match.group(1).strip()
+                    logger.info(f"Extracted body from original message: {body[:50]}...")
+
+            # Final validation and default
+            if not body:
+                logger.warning(
+                    "Email body is empty after all extraction attempts! Using default message.",
+                    parameters_received={
+                        k: v for k, v in parameters.items() if not k.startswith("_")
+                    },
+                )
+                # Generate a minimal default body
+                body = "Hello,\n\nThis is an automated message from SE SME Agent.\n\nBest regards,\nSE SME Agent"
+            else:
+                logger.info(f"Email body successfully extracted (length: {len(body)})")
+
             template_name = parameters.get("template")
             template_variables = parameters.get("template_variables", {})
             attachments = parameters.get("attachments", [])
@@ -1108,6 +1260,23 @@ class EmailAutomationTool(BaseTool):
     ) -> MIMEMultipart:
         """Create email message with attachments"""
 
+        # Log email composition details
+        logger.info(
+            "Creating email message",
+            recipient=recipient,
+            subject=subject[:50] if subject else "(empty)",
+            body_length=len(body) if body else 0,
+            has_body=bool(body),
+            attachment_count=len([a for a in attachments if a.is_valid]),
+        )
+
+        if not body:
+            logger.error(
+                "⚠ CRITICAL: Email body is EMPTY when creating message!",
+                recipient=recipient,
+                subject=subject,
+            )
+
         # Create message
         message = MIMEMultipart()
 
@@ -1120,6 +1289,8 @@ class EmailAutomationTool(BaseTool):
 
         # Add body
         message.attach(MIMEText(body, "plain"))
+
+        logger.debug(f"Email message created with body length: {len(body)}")
 
         # Add attachments
         for attachment in attachments:
@@ -1212,13 +1383,13 @@ class EmailAutomationTool(BaseTool):
                 "subject": {
                     "type": "string",
                     "description": "Email subject line",
-                    "required": False,
+                    "required": True,
                     "maxLength": 200,
                 },
                 "body": {
                     "type": "string",
                     "description": "Email body content",
-                    "required": False,
+                    "required": True,
                     "maxLength": 10000,
                 },
                 "template": {
@@ -1254,7 +1425,7 @@ class EmailAutomationTool(BaseTool):
                     "required": False,
                 },
             },
-            "required_params": ["recipients"],
+            "required_params": ["recipients", "subject", "body"],
             "returns": {
                 "type": "object",
                 "properties": {

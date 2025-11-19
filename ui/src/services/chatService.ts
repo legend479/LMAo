@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { Conversation, Message, ApiResponse } from '../types';
 
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000/api';
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000/api/v1';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
@@ -21,7 +21,7 @@ export const chatService = {
   // Conversation management
   async getConversations(): Promise<ApiResponse<Conversation[]>> {
     try {
-      const response = await api.get('/conversations');
+      const response = await api.get('/chat/sessions');
       return response.data;
     } catch (error: any) {
       return {
@@ -33,7 +33,7 @@ export const chatService = {
 
   async createConversation(title?: string): Promise<ApiResponse<Conversation>> {
     try {
-      const response = await api.post('/conversations', { title });
+      const response = await api.post('/chat/sessions', { title });
       return response.data;
     } catch (error: any) {
       return {
@@ -45,7 +45,7 @@ export const chatService = {
 
   async getConversation(id: string): Promise<ApiResponse<Conversation>> {
     try {
-      const response = await api.get(`/conversations/${id}`);
+      const response = await api.get(`/chat/sessions/${id}`);
       return response.data;
     } catch (error: any) {
       return {
@@ -57,7 +57,7 @@ export const chatService = {
 
   async updateConversation(id: string, updates: Partial<Conversation>): Promise<ApiResponse<Conversation>> {
     try {
-      const response = await api.patch(`/conversations/${id}`, updates);
+      const response = await api.patch(`/chat/sessions/${id}`, updates);
       return response.data;
     } catch (error: any) {
       return {
@@ -69,7 +69,7 @@ export const chatService = {
 
   async deleteConversation(id: string): Promise<ApiResponse<void>> {
     try {
-      const response = await api.delete(`/conversations/${id}`);
+      const response = await api.delete(`/chat/sessions/${id}`);
       return response.data;
     } catch (error: any) {
       return {
@@ -82,8 +82,8 @@ export const chatService = {
   // Message management
   async getMessages(conversationId: string, page = 1, limit = 50): Promise<ApiResponse<Message[]>> {
     try {
-      const response = await api.get(`/conversations/${conversationId}/messages`, {
-        params: { page, limit },
+      const response = await api.get(`/chat/sessions/${conversationId}/history`, {
+        params: { limit, offset: (page - 1) * limit },
       });
       return response.data;
     } catch (error: any) {
@@ -96,9 +96,9 @@ export const chatService = {
 
   async sendMessage(conversationId: string, content: string): Promise<ApiResponse<Message>> {
     try {
-      const response = await api.post(`/conversations/${conversationId}/messages`, {
-        content,
-        timestamp: new Date(),
+      const response = await api.post('/chat/message', {
+        message: content,
+        session_id: conversationId,
       });
       return response.data;
     } catch (error: any) {
@@ -112,7 +112,7 @@ export const chatService = {
   // Search functionality
   async searchConversations(query: string): Promise<ApiResponse<Conversation[]>> {
     try {
-      const response = await api.get('/conversations/search', {
+      const response = await api.get('/chat/sessions', {
         params: { q: query },
       });
       return response.data;
@@ -126,7 +126,7 @@ export const chatService = {
 
   async searchMessages(conversationId: string, query: string): Promise<ApiResponse<Message[]>> {
     try {
-      const response = await api.get(`/conversations/${conversationId}/messages/search`, {
+      const response = await api.get(`/chat/sessions/${conversationId}/history`, {
         params: { q: query },
       });
       return response.data;
