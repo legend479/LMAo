@@ -142,6 +142,7 @@ class EmailProviderManager:
             smtp_server="localhost",
             smtp_port=587,
             use_tls=True,
+            auth_required=False,
             rate_limit_per_hour=1000,
         )
 
@@ -155,6 +156,16 @@ class EmailProviderManager:
         """Configure email provider credentials"""
 
         self.credentials[provider_name] = {"username": username, "password": password}
+        logger.debug(
+            "Configured provider credentials",
+            provider=provider_name,
+            has_username=bool(username),
+            auth_required=(
+                self.providers.get(provider_name).auth_required
+                if provider_name in self.providers
+                else None
+            ),
+        )
 
         # Apply custom configuration if provided
         if custom_config and provider_name in self.providers:
@@ -174,8 +185,25 @@ class EmailProviderManager:
 
         current_time = datetime.now()
 
+        # Iterate providers and log why a provider is or isn't available
         for provider_name, provider in self.providers.items():
-            if provider_name not in self.credentials:
+            creds = self.credentials.get(provider_name)
+            has_creds = bool(creds)
+
+            logger.debug(
+                "Checking provider availability",
+                provider=provider_name,
+                auth_required=provider.auth_required,
+                has_credentials=has_creds,
+                rate_limit=provider.rate_limit_per_hour,
+            )
+
+            # If provider requires authentication but no credentials are configured, skip it.
+            if provider.auth_required and not has_creds:
+                logger.debug(
+                    "Skipping provider due to missing credentials",
+                    provider=provider_name,
+                )
                 continue
 
             # Check rate limits
@@ -189,9 +217,20 @@ class EmailProviderManager:
                 }
                 rate_limit_info = self.rate_limits[provider_name]
 
-            # Check if under rate limit
-            if rate_limit_info.get("sent_count", 0) < provider.rate_limit_per_hour:
+            sent_count = rate_limit_info.get("sent_count", 0)
+            if sent_count < provider.rate_limit_per_hour:
+                logger.debug(
+                    "Provider selected",
+                    provider=provider_name,
+                    sent_count=sent_count,
+                )
                 return provider_name
+
+            logger.debug(
+                "Provider unavailable due to rate limit",
+                provider=provider_name,
+                sent_count=sent_count,
+            )
 
         return None
 
@@ -621,17 +660,66 @@ class EmailAutomationTool(BaseTool):
             logger.info("Gmail provider configured from environment")
 
         # Check for SMTP configuration
+        # Prefer explicit environment variables, but fall back to application settings
         smtp_server = os.getenv("SMTP_SERVER")
         smtp_user = os.getenv("SMTP_USERNAME")
         smtp_pass = os.getenv("SMTP_PASSWORD")
-        smtp_port = os.getenv("SMTP_PORT", "587")
+        smtp_port = os.getenv("SMTP_PORT")
 
-        if smtp_server and smtp_user and smtp_pass:
-            custom_config = {"smtp_server": smtp_server, "smtp_port": int(smtp_port)}
-            self.provider_manager.configure_provider(
-                "smtp", smtp_user, smtp_pass, custom_config
+        # Fallback: use application settings (loads .env via pydantic BaseSettings)
+        try:
+            from src.shared.config import get_settings
+
+            settings = get_settings()
+        except Exception:
+            settings = None
+
+        if not smtp_server and settings and settings.email_smtp_host:
+            smtp_server = settings.email_smtp_host
+            smtp_port = (
+                str(settings.email_smtp_port)
+                if getattr(settings, "email_smtp_port", None)
+                else smtp_port
             )
-            logger.info("SMTP provider configured from environment")
+            smtp_user = smtp_user or settings.email_smtp_username
+            smtp_pass = smtp_pass or settings.email_smtp_password
+
+        # Default port
+        smtp_port = smtp_port or "587"
+
+        if smtp_server:
+            # If username/password provided, configure with auth
+            if smtp_user and smtp_pass:
+                custom_config = {
+                    "smtp_server": smtp_server,
+                    "smtp_port": int(smtp_port),
+                }
+                self.provider_manager.configure_provider(
+                    "smtp", smtp_user, smtp_pass, custom_config
+                )
+                logger.info("SMTP provider configured from environment (with auth)")
+            else:
+                # Configure SMTP host/port and allow unauthenticated usage (useful for localhost/relay)
+                provider = self.provider_manager.providers.get("smtp")
+                if provider:
+                    provider.smtp_server = smtp_server
+                    provider.smtp_port = int(smtp_port)
+                    provider.auth_required = False
+
+                    # Ensure rate limit info exists so provider is considered available
+                    if "smtp" not in self.provider_manager.rate_limits:
+                        self.provider_manager.rate_limits["smtp"] = {
+                            "sent_count": 0,
+                            "reset_time": datetime.now() + timedelta(hours=1),
+                        }
+
+                logger.info(
+                    "SMTP provider configured from environment (no auth)",
+                    smtp_server=smtp_server,
+                    smtp_port=smtp_port,
+                )
+        else:
+            logger.debug("No SMTP configuration found in environment or settings")
 
     async def execute(
         self, parameters: Dict[str, Any], context: ExecutionContext
@@ -834,7 +922,18 @@ class EmailAutomationTool(BaseTool):
             )
 
         provider = self.provider_manager.providers[provider_name]
-        credentials = self.provider_manager.credentials[provider_name]
+        # Use get so we don't KeyError for providers that don't require auth
+        credentials = self.provider_manager.credentials.get(provider_name, {})
+
+        logger.debug(
+            "Preparing to send emails",
+            provider=provider_name,
+            provider_server=provider.smtp_server,
+            provider_port=provider.smtp_port,
+            provider_auth_required=provider.auth_required,
+            has_credentials=bool(credentials),
+            recipients=len(recipients),
+        )
 
         # Generate message ID
         message_id = self._generate_message_id()
@@ -856,8 +955,13 @@ class EmailAutomationTool(BaseTool):
             for recipient in recipients:
                 try:
                     # Create message
+                    # Determine a safe sender email (fallback to no-reply at provider host)
+                    sender_email = credentials.get(
+                        "username", f"no-reply@{provider.smtp_server.split(':')[0]}"
+                    )
+
                     message = self._create_message(
-                        sender_email=credentials["username"],
+                        sender_email=sender_email,
                         sender_name=sender_name,
                         recipient=recipient,
                         subject=subject,
@@ -954,12 +1058,28 @@ class EmailAutomationTool(BaseTool):
 
             # Authenticate if required
             if provider.auth_required:
-                smtp_server.login(credentials["username"], credentials["password"])
+                # Only attempt login if credentials are present
+                if (
+                    credentials
+                    and credentials.get("username")
+                    and credentials.get("password")
+                ):
+                    smtp_server.login(credentials["username"], credentials["password"])
+                else:
+                    raise RuntimeError(
+                        "Provider requires authentication but no credentials provided"
+                    )
 
             return smtp_server
 
         except Exception as e:
-            logger.error(f"Failed to create SMTP connection: {e}")
+            logger.error(
+                "Failed to create SMTP connection",
+                error=str(e),
+                provider=provider.name,
+                server=provider.smtp_server,
+                port=provider.smtp_port,
+            )
             raise
 
     def _create_message(

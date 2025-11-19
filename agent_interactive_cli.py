@@ -157,26 +157,24 @@ class AgentServerInteractiveCLI:
         """Print detailed error information for debugging"""
         import traceback
 
-        console.print(
-            f"\n[bold red]❌ Error in {context}[/bold red]"
-            if context
-            else "\n[bold red]❌ Error[/bold red]"
-        )
-        console.print(f"[red]Error Type: {type(error).__name__}[/red]")
-        console.print(f"[red]Error Message: {str(error)}[/red]")
+        # Use markup=False when printing exception contents to avoid MarkupError
+        header = f"\n❌ Error in {context}" if context else "\n❌ Error"
+        console.print(header, style="bold red", markup=False)
+        console.print(f"Error Type: {type(error).__name__}", style="red", markup=False)
+        console.print(f"Error Message: {str(error)}", style="red", markup=False)
 
         if self.debug_mode:
-            console.print("\n[yellow]📋 Full Traceback:[/yellow]")
-            console.print("[dim]" + "=" * 70 + "[/dim]")
+            console.print("\n📋 Full Traceback:", style="yellow", markup=False)
+            console.print("=" * 70, style="dim", markup=False)
 
             # Get full traceback
             tb_lines = traceback.format_exception(
                 type(error), error, error.__traceback__
             )
             for line in tb_lines:
-                console.print(f"[dim]{line}[/dim]", end="")
+                console.print(line, style="dim", markup=False, end="")
 
-            console.print("[dim]" + "=" * 70 + "[/dim]")
+            console.print("=" * 70, style="dim", markup=False)
 
         self.session_stats["errors_encountered"] += 1
 
@@ -253,7 +251,9 @@ class AgentServerInteractiveCLI:
             console.print("[green]✅ Redis running[/green]")
             return True
         except Exception as e:
-            console.print(f"[red]❌ Redis not accessible: {str(e)[:50]}[/red]")
+            console.print(
+                f"❌ Redis not accessible: {str(e)[:50]}", style="red", markup=False
+            )
             return False
 
     async def initialize_agent_server(self):
@@ -291,10 +291,14 @@ class AgentServerInteractiveCLI:
             return True
 
         except Exception as e:
-            console.print(f"[red]❌ Agent Server initialization failed: {str(e)}[/red]")
+            console.print(
+                f"❌ Agent Server initialization failed: {str(e)}",
+                style="red",
+                markup=False,
+            )
             import traceback
 
-            console.print(f"[dim]{traceback.format_exc()}[/dim]")
+            console.print(traceback.format_exc(), style="dim", markup=False)
             return False
 
     async def health_check(self):
@@ -645,9 +649,11 @@ class AgentServerInteractiveCLI:
                 )
 
                 if self.debug_mode:
-                    console.print("\n[dim]Full metadata:[/dim]")
+                    console.print("\nFull metadata:", style="dim", markup=False)
                     console.print(
-                        f"[dim]{json.dumps(result.get('metadata', {}), indent=2)}[/dim]"
+                        json.dumps(result.get("metadata", {}), indent=2),
+                        style="dim",
+                        markup=False,
                     )
 
             # Display result with rich formatting
@@ -663,8 +669,8 @@ class AgentServerInteractiveCLI:
                     Panel(response_text, border_style="green", padding=(1, 2))
                 )
             else:
-                # Direct print for short responses
-                console.print(f"\n[green]{response_text}[/green]\n")
+                # Direct print for short responses (safe from markup parsing)
+                console.print(response_text, style="green", markup=False)
 
             # Display execution metrics
             console.print("\n[bold cyan]📊 Execution Metrics[/bold cyan]")
@@ -792,7 +798,9 @@ class AgentServerInteractiveCLI:
             return True
 
         except Exception as e:
-            console.print(f"[red]❌ Failed to list tools: {str(e)}[/red]")
+            console.print(
+                f"❌ Failed to list tools: {str(e)}", style="red", markup=False
+            )
             return False
 
     async def execute_tool(self, tool_name: str = None):
@@ -822,7 +830,9 @@ class AgentServerInteractiveCLI:
                     console.print(f"  • {tool['name']}")
                 return False
         except Exception as e:
-            console.print(f"[yellow]⚠️  Could not fetch tool info: {str(e)}[/yellow]")
+            console.print(
+                f"⚠️  Could not fetch tool info: {str(e)}", style="yellow", markup=False
+            )
             tool_info = None
 
         # Interactive parameter collection
@@ -918,7 +928,9 @@ class AgentServerInteractiveCLI:
 
             else:
                 console.print(
-                    f"\n[red]❌ Tool Execution Failed: {result.get('error', 'Unknown error')}[/red]"
+                    f"\n❌ Tool Execution Failed: {result.get('error', 'Unknown error')}",
+                    style="red",
+                    markup=False,
                 )
 
             self.session_stats["tools_executed"] += 1
@@ -938,7 +950,9 @@ class AgentServerInteractiveCLI:
             return result.get("status") == "success"
 
         except Exception as e:
-            console.print(f"[red]❌ Tool execution failed: {str(e)}[/red]")
+            console.print(
+                f"❌ Tool execution failed: {str(e)}", style="red", markup=False
+            )
 
             # Log the failed operation
             self.log_operation(
@@ -1160,7 +1174,9 @@ class AgentServerInteractiveCLI:
                     console.print("\n[bold]Tool Results:[/bold]")
                     for tool_result in execution.tool_results:
                         console.print(
-                            f"  • [green]{tool_result.get('task_id', 'Unknown')}[/green]"
+                            "  • " + str(tool_result.get("task_id", "Unknown")),
+                            style="green",
+                            markup=False,
                         )
 
                 # Metadata
@@ -1184,7 +1200,9 @@ class AgentServerInteractiveCLI:
             return True
 
         except Exception as e:
-            console.print(f"[red]❌ Failed to show traces: {str(e)}[/red]")
+            console.print(
+                f"❌ Failed to show traces: {str(e)}", style="red", markup=False
+            )
             return False
 
     async def show_memory_context(self):
@@ -1249,7 +1267,9 @@ class AgentServerInteractiveCLI:
             return True
 
         except Exception as e:
-            console.print(f"[red]❌ Failed to show memory: {str(e)}[/red]")
+            console.print(
+                f"❌ Failed to show memory: {str(e)}", style="red", markup=False
+            )
             return False
 
     async def show_planning_details(self):
@@ -1422,7 +1442,7 @@ class AgentServerInteractiveCLI:
                     console.print(
                         "\n[bold red]❌ RAG Server Status: OFFLINE[/bold red]"
                     )
-                    console.print(f"[red]Error: {str(e)}[/red]")
+                    console.print(f"Error: {str(e)}", style="red", markup=False)
 
                     console.print("\n[yellow]💡 Troubleshooting Steps:[/yellow]")
                     console.print("  1. Check if RAG server is running:")
@@ -1445,7 +1465,7 @@ class AgentServerInteractiveCLI:
 
         except ImportError as e:
             console.print("\n[bold red]❌ RAG Client Not Available[/bold red]")
-            console.print(f"[red]Import Error: {str(e)}[/red]")
+            console.print(f"Import Error: {str(e)}", style="red", markup=False)
             console.print(
                 "\n[yellow]The RAG pipeline module is not properly installed[/yellow]"
             )
@@ -1986,7 +2006,9 @@ class AgentServerInteractiveCLI:
                             return False
 
             except Exception as e:
-                console.print(f"[red]❌ Step {i} failed: {str(e)}[/red]")
+                console.print(
+                    f"❌ Step {i} failed: {str(e)}", style="red", markup=False
+                )
                 demo_results[step_name] = False
 
                 if self.debug_mode:
@@ -2284,13 +2306,15 @@ class AgentServerInteractiveCLI:
                             console.print(f"    Error: {result.get('error')}")
 
                 except Exception as e:
-                    console.print(f"\n  [red]❌ FAILED[/red]")
+                    console.print("\n  FAILED", style="red", markup=False)
                     console.print(f"    Error: {str(e)[:100]}")
 
                     if self.debug_mode:
-                        console.print(f"\n  [dim]Debug Information:[/dim]")
-                        console.print(f"    [dim]Tool: {tool_name}[/dim]")
-                        console.print(f"    [dim]Error Type: {type(e).__name__}[/dim]")
+                        console.print(
+                            "\n  Debug Information:", style="dim", markup=False
+                        )
+                        console.print(f"    Tool: {tool_name}")
+                        console.print(f"    Error Type: {type(e).__name__}")
 
                 # Update stats
                 self.session_stats["tools_executed"] += 1
@@ -2586,14 +2610,20 @@ class AgentServerInteractiveCLI:
                                 )
                     except Exception as e:
                         console.print(
-                            f"  [dim]Could not fetch tool details: {str(e)}[/dim]"
+                            f"  Could not fetch tool details: {str(e)}",
+                            style="dim",
+                            markup=False,
                         )
                 else:
                     console.print(
                         "  ❌ [red]email_automation tool is NOT registered[/red]"
                     )
             except Exception as e:
-                console.print(f"  [red]Error checking tool registry: {str(e)}[/red]")
+                console.print(
+                    f"  Error checking tool registry: {str(e)}",
+                    style="red",
+                    markup=False,
+                )
 
         console.print("\n[bold]Recommendations:[/bold]")
         if not gmail_configured and not smtp_configured:
@@ -3209,7 +3239,8 @@ def main():
     except KeyboardInterrupt:
         console.print("\n[yellow]Application terminated by user[/yellow]")
     except Exception as e:
-        console.print(f"\n[red]Fatal error: {str(e)}[/red]")
+        # Print exception without parsing Rich markup to avoid MarkupError
+        console.print(f"\nFatal error: {str(e)}", style="red", markup=False)
         console.print("[dim]Please check the requirements and try again[/dim]")
 
 

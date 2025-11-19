@@ -11,6 +11,9 @@ from fastapi.openapi.utils import get_openapi
 from contextlib import asynccontextmanager
 import asyncio
 import signal
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from .routers import health, chat, documents, tools, auth, admin
 from .middleware import security, logging, rate_limiting, validation, compression

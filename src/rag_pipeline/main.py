@@ -5,6 +5,9 @@ Specialized retrieval system optimized for software engineering content
 
 import time
 from typing import Dict, Any, List, Optional
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from .models import ProcessedDocument, IngestionResult, Chunk, DocumentMetadata
 from src.shared.config import get_settings

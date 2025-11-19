@@ -5,6 +5,9 @@ Core orchestration engine managing conversations and tool execution
 
 from typing import Dict, Any, Optional, List
 from datetime import datetime
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from .orchestrator import LangGraphOrchestrator
 from .planning import PlanningModule

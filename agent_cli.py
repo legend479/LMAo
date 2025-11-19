@@ -12,6 +12,10 @@ from pathlib import Path
 from datetime import datetime
 from typing import Dict, Any, Optional
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 

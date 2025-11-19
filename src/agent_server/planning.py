@@ -107,7 +107,7 @@ class PlanningModule:
     def __init__(self):
         self._initialized = False
         self.llm_integration = None
-        self.tool_intent_mapper = ToolIntentMapper()
+        self.tool_intent_mapper = None  # Will be initialized with LLM
         self.prompt_templates = PromptTemplates()
         self.intent_patterns = self._initialize_intent_patterns()
         self.entity_patterns = self._initialize_entity_patterns()
@@ -130,13 +130,20 @@ class PlanningModule:
         self.llm_integration = await get_llm_integration()
         logger.info("LLM integration initialized for planning")
 
+        # Initialize ToolIntentMapper with LLM integration
+        self.tool_intent_mapper = ToolIntentMapper(llm_integration=self.llm_integration)
+        await self.tool_intent_mapper.initialize(self.llm_integration)
+        logger.info("ToolIntentMapper initialized with LLM support")
+
         # Initialize advanced planning components
         await self._initialize_goal_decomposition()
         await self._initialize_dependency_analyzer()
         await self._initialize_adaptation_engine()
 
         self._initialized = True
-        logger.info("Planning Module initialized with advanced capabilities")
+        logger.info(
+            "Planning Module initialized with advanced capabilities and LLM-based intent classification"
+        )
 
     async def create_plan(
         self, message: str, context: ConversationContext
@@ -208,18 +215,20 @@ class PlanningModule:
     async def _create_enhanced_plan(
         self, message: str, context: ConversationContext
     ) -> Optional[ExecutionPlan]:
-        """Create execution plan using enhanced tool-aware intent classification"""
+        """Create execution plan using enhanced tool-aware intent classification with LLM"""
 
-        # Enhanced intent classification with tool mapping
-        intent_match = self.tool_intent_mapper.classify_intent(
+        # Enhanced intent classification with tool mapping (LLM-based with pattern fallback)
+        intent_match = await self.tool_intent_mapper.classify_intent_async(
             message, context={"history": context.message_history}
         )
 
         logger.info(
-            "Enhanced intent classified",
+            "Enhanced intent classified (LLM-based)",
+            message=message[:100],
             primary_intent=intent_match.primary_intent.value,
             confidence=intent_match.confidence,
             suggested_tools=intent_match.suggested_tools,
+            tool_sequence=[tool for tool, _ in intent_match.tool_sequence],
             reasoning=intent_match.reasoning,
         )
 
@@ -235,8 +244,8 @@ class PlanningModule:
                 tool_name, message, context
             )
 
-            # Merge parameters
-            parameters = {**tool_params, **extracted_params}
+            # Merge parameters (tool_params from sequence take precedence)
+            parameters = {**extracted_params, **tool_params}
 
             # Add query/description to parameters based on tool type
             if "query" not in parameters and tool_name in [
@@ -248,11 +257,43 @@ class PlanningModule:
                 parameters["description"] = message
             elif "topic" not in parameters and tool_name == "content_generation":
                 parameters["topic"] = message
+                logger.debug(
+                    "Added topic to content_generation",
+                    task_id=task_id,
+                    topic=message[:50],
+                )
+
+            # CRITICAL FIX: Handle parameter injection from previous task BEFORE creating the task
+            # Set up dependencies (sequential by default)
+            if i > 0:
+                dependencies[task_id] = [f"task_{i}"]
+
+                # Handle parameter injection from previous task
+                if tool_params.get("content_from_previous"):
+                    prev_task_id = f"task_{i}"
+                    # Use placeholder syntax that orchestrator will resolve
+                    parameters["content"] = f"{{{{ {prev_task_id}.result }}}}"
+                    logger.debug(
+                        "Set content placeholder for task",
+                        task_id=task_id,
+                        prev_task_id=prev_task_id,
+                        placeholder=parameters["content"],
+                    )
+                elif tool_params.get("code_from_previous"):
+                    prev_task_id = f"task_{i}"
+                    parameters["code"] = f"{{{{ {prev_task_id}.result }}}}"
+                    logger.debug(
+                        "Set code placeholder for task",
+                        task_id=task_id,
+                        prev_task_id=prev_task_id,
+                    )
+            else:
+                dependencies[task_id] = []
 
             # Determine task type
             task_type = self._map_tool_to_task_type(tool_name)
 
-            # Create task with enhanced parameters
+            # Create task with enhanced parameters (now includes placeholders if needed)
             task = {
                 "id": task_id,
                 "name": f"{tool_name}_task",
@@ -264,20 +305,19 @@ class PlanningModule:
                 "intent": intent_match.primary_intent.value,
             }
 
+            logger.debug(
+                "Created task in enhanced plan",
+                task_id=task_id,
+                tool_name=tool_name,
+                task_type=task_type,
+                parameters=list(parameters.keys()),
+                parameter_values={k: str(v)[:100] for k, v in parameters.items()},
+                has_content_from_previous=tool_params.get(
+                    "content_from_previous", False
+                ),
+            )
+
             tasks.append(task)
-
-            # Set up dependencies (sequential by default)
-            if i > 0:
-                dependencies[task_id] = [f"task_{i}"]
-
-                # Handle parameter injection from previous task
-                if tool_params.get("content_from_previous") or tool_params.get(
-                    "code_from_previous"
-                ):
-                    prev_task_id = f"task_{i}"
-                    parameters["content"] = f"{{{{ {prev_task_id}.result }}}}"
-            else:
-                dependencies[task_id] = []
 
         # Calculate estimated duration
         estimated_duration = sum(task["estimated_duration"] for task in tasks)
@@ -497,17 +537,37 @@ class PlanningModule:
         if any(indicator in message_lower for indicator in multi_step_indicators):
             return IntentType.MULTI_STEP
 
-        # Document generation detection
+        # Document generation detection - CHECK THIS FIRST (more specific than content generation)
+        # Enhanced patterns to catch more document generation requests
         doc_patterns = [
             "generate document",
+            "create document",
+            "make document",
             "create report",
+            "generate report",
+            "make report",
             "write documentation",
+            "create documentation",
             "export to",
             "save as",
             "create pdf",
-            "generate report",
+            "generate pdf",
+            "make pdf",
+            "create docx",
+            "generate docx",
+            "create ppt",
+            "generate ppt",
+            "create powerpoint",
+            "generate powerpoint",
+            "document about",
+            "report about",
+            "report on",
+            "pdf about",
+            "docx about",
+            "ppt about",
         ]
         if any(pattern in message_lower for pattern in doc_patterns):
+            logger.info(f"Matched document generation pattern in: {message[:50]}...")
             return IntentType.DOCUMENT_GENERATION
 
         # Code generation detection
@@ -525,17 +585,21 @@ class PlanningModule:
         if any(pattern in message_lower for pattern in code_patterns):
             return IntentType.CODE_GENERATION
 
-        # Content generation detection
+        # Content generation detection - MORE SPECIFIC PATTERNS (after document check)
+        # Avoid overly broad patterns that would catch document generation
         content_patterns = [
-            "generate",
             "create content",
-            "write",
+            "generate content",
+            "write tutorial",
+            "create tutorial",
+            "write guide",
+            "create guide",
             "compose",
             "draft",
-            "explain",
-            "tutorial",
-            "guide",
-            "example",
+            "write article",
+            "create article",
+            "write blog",
+            "create blog",
         ]
         if any(pattern in message_lower for pattern in content_patterns):
             return IntentType.CONTENT_GENERATION
