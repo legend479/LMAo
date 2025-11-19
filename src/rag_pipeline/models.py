@@ -45,6 +45,7 @@ class DocumentMetadata:
     tags: List[str] = None
     encoding: Optional[str] = None
     category: Optional[str] = None
+    user_id: Optional[str] = None
     custom_metadata: Dict[str, Any] = None
 
     def __post_init__(self):

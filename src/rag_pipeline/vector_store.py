@@ -13,6 +13,7 @@ from elasticsearch.exceptions import NotFoundError
 
 from .models import ProcessedDocument
 from ..shared.logging import get_logger
+from src.shared.config import get_elasticsearch_config
 
 logger = get_logger(__name__)
 
@@ -59,17 +60,29 @@ class ElasticsearchConfig:
 
     def __post_init__(self):
         if self.hosts is None:
-            # CHANGED: Read from Environment Variables first, then default to localhost
-            es_host = os.getenv("ELASTICSEARCH_HOST", "localhost")
-            es_port = os.getenv("ELASTICSEARCH_PORT", "9200")
+            try:
+                # Prefer shared configuration for Elasticsearch
+                es_config = get_elasticsearch_config()
+                self.hosts = es_config.get("hosts", self.hosts)
+                self.timeout = es_config.get("timeout", self.timeout)
+                self.max_retries = es_config.get("max_retries", self.max_retries)
+                logger.info(
+                    f"Configured Elasticsearch hosts from settings: {self.hosts}"
+                )
+            except Exception as e:
+                # Fallback to environment variables if shared config is unavailable
+                es_host = os.getenv("ELASTICSEARCH_HOST", "localhost")
+                es_port = os.getenv("ELASTICSEARCH_PORT", "9200")
 
-            # Handle cases where ELASTICSEARCH_HOST might include http/https
-            if es_host.startswith("http://") or es_host.startswith("https://"):
-                self.hosts = [f"{es_host}:{es_port}"]
-            else:
-                self.hosts = [f"http://{es_host}:{es_port}"]
+                # Handle cases where ELASTICSEARCH_HOST might include http/https
+                if es_host.startswith("http://") or es_host.startswith("https://"):
+                    self.hosts = [f"{es_host}:{es_port}"]
+                else:
+                    self.hosts = [f"http://{es_host}:{es_port}"]
 
-            logger.info(f"Configured Elasticsearch hosts: {self.hosts}")
+                logger.info(
+                    f"Configured Elasticsearch hosts from environment: {self.hosts}"
+                )
 
 
 class ElasticsearchStore:
@@ -98,6 +111,7 @@ class ElasticsearchStore:
                     },
                     "author": {"type": "keyword"},
                     "category": {"type": "keyword"},
+                    "user_id": {"type": "keyword"},
                     "file_path": {"type": "keyword"},
                     "file_size": {"type": "long"},
                     "mime_type": {"type": "keyword"},
@@ -175,6 +189,7 @@ class ElasticsearchStore:
                     "document_title": {"type": "text"},
                     "document_author": {"type": "keyword"},
                     "document_category": {"type": "keyword"},
+                    "user_id": {"type": "keyword"},
                     "document_creation_date": {"type": "date"},
                     "mime_type": {"type": "keyword"},
                     # Vector embeddings for semantic search
@@ -332,6 +347,7 @@ class ElasticsearchStore:
                 "processing_time": processed_doc.processing_time,
                 "tags": processed_doc.metadata.tags or [],
                 "keywords": processed_doc.metadata.keywords or [],
+                "user_id": processed_doc.metadata.user_id,
             }
 
             # Store document
@@ -364,6 +380,7 @@ class ElasticsearchStore:
                     "document_category": processed_doc.metadata.category,
                     "document_creation_date": processed_doc.metadata.created_at,
                     "mime_type": processed_doc.metadata.mime_type,
+                    "user_id": processed_doc.metadata.user_id,
                     # Search metadata
                     "indexed_date": datetime.utcnow(),
                     "last_updated": datetime.utcnow(),
@@ -377,12 +394,22 @@ class ElasticsearchStore:
                 ):
                     # Fix in src/rag_pipeline/vector_store.py
 
-                    if "general" in chunk.embeddings and chunk.embeddings["general"] is not None:
-                        chunk_data["embedding_general"] = chunk.embeddings["general"].tolist()
-                    if "domain" in chunk.embeddings and chunk.embeddings["domain"] is not None:
-                        chunk_data["embedding_domain"] = chunk.embeddings["domain"].tolist()
+                    if (
+                        "general" in chunk.embeddings
+                        and chunk.embeddings["general"] is not None
+                    ):
+                        chunk_data["embedding_general"] = chunk.embeddings[
+                            "general"
+                        ].tolist()
+                    if (
+                        "domain" in chunk.embeddings
+                        and chunk.embeddings["domain"] is not None
+                    ):
+                        chunk_data["embedding_domain"] = chunk.embeddings[
+                            "domain"
+                        ].tolist()
 
-                # Add to bulk operations    
+                # Add to bulk operations
                 chunk_operations.extend(
                     [
                         {
@@ -552,6 +579,9 @@ class ElasticsearchStore:
                     ]["lte"]
                 filter_clauses.append(date_filter)
 
+            if "user_id" in filters:
+                filter_clauses.append({"term": {"user_id": filters["user_id"]}})
+
             if filter_clauses:
                 search_body["query"]["bool"]["filter"] = filter_clauses
 
@@ -623,10 +653,16 @@ class ElasticsearchStore:
         if filters:
             filter_clauses = []
             for key, value in filters.items():
-                if isinstance(value, list):
-                    filter_clauses.append({"terms": {f"metadata.{key}": value}})
+                if key == "user_id":
+                    if isinstance(value, list):
+                        filter_clauses.append({"terms": {"user_id": value}})
+                    else:
+                        filter_clauses.append({"term": {"user_id": value}})
                 else:
-                    filter_clauses.append({"term": {f"metadata.{key}": value}})
+                    if isinstance(value, list):
+                        filter_clauses.append({"terms": {f"metadata.{key}": value}})
+                    else:
+                        filter_clauses.append({"term": {f"metadata.{key}": value}})
 
             if filter_clauses:
                 search_body["query"] = {
@@ -771,6 +807,9 @@ class ElasticsearchStore:
                             "date_range"
                         ]["lte"]
                     filter_clauses.append(date_filter)
+
+                if "user_id" in filters:
+                    filter_clauses.append({"term": {"user_id": filters["user_id"]}})
 
                 if filter_clauses:
                     search_body["query"] = {"bool": {"filter": filter_clauses}}

@@ -253,6 +253,18 @@ class DocumentOperations:
                 return True
             return False
 
+    @staticmethod
+    def delete_document(document_id: str) -> bool:
+        """Delete a document record by ID"""
+        with database_session_scope() as session:
+            document = (
+                session.query(Document).filter(Document.id == document_id).first()
+            )
+            if document:
+                session.delete(document)
+                return True
+            return False
+
 
 class ToolExecutionOperations:
     """Tool execution-related database operations"""

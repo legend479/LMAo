@@ -3,11 +3,17 @@ Tools Router
 Handles tool management and execution endpoints
 """
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import List, Dict, Any, Optional
 
+from .auth import get_current_active_user, User
+import src.shared.services as services
+from src.shared.logging import get_logger
+
 router = APIRouter()
+
+logger = get_logger(__name__)
 
 
 class ToolSchema(BaseModel):
@@ -23,17 +29,64 @@ class ToolExecutionRequest(BaseModel):
     session_id: Optional[str] = None
 
 
+class ToolInvocationRequest(BaseModel):
+    parameters: Dict[str, Any]
+    session_id: Optional[str] = None
+
+
 class ToolExecutionResponse(BaseModel):
     tool_name: str
     result: Any
     status: str
     execution_time: float
+    metadata: Dict[str, Any] = {}
 
 
 @router.get("/", response_model=List[ToolSchema])
-async def list_tools():
+async def list_tools(current_user: User = Depends(get_current_active_user)):
     """List all available tools"""
     # TODO: Get tools from tool registry
+
+    # Prefer real tools from the Agent service when available
+    try:
+        agent_client = await services.get_agent_client()
+        tools_data = await agent_client.get_available_tools()
+
+        if isinstance(tools_data, dict):
+            raw_tools = tools_data.get("tools", []) or []
+        else:
+            raw_tools = tools_data or []
+
+        tools: List[ToolSchema] = []
+        for tool in raw_tools:
+            name = tool.get("name")
+            if not name:
+                continue
+
+            description = tool.get("description", "")
+            schema = tool.get("schema", {}) if isinstance(tool, dict) else {}
+
+            parameters = schema.get("parameters") or tool.get("parameters") or {}
+            required_params = (
+                schema.get("required_params") or tool.get("required_params") or []
+            )
+
+            tools.append(
+                ToolSchema(
+                    name=name,
+                    description=description,
+                    parameters=parameters,
+                    required_params=required_params,
+                )
+            )
+
+        if tools:
+            return tools
+
+    except Exception as e:
+        logger.error("Failed to fetch tools from agent service", error=str(e))
+
+    # Fallback to a static knowledge retrieval tool definition
     return [
         ToolSchema(
             name="knowledge_retrieval",
@@ -45,15 +98,94 @@ async def list_tools():
 
 
 @router.post("/execute", response_model=ToolExecutionResponse)
-async def execute_tool(request: ToolExecutionRequest):
+async def execute_tool(
+    request: ToolExecutionRequest,
+    current_user: User = Depends(get_current_active_user),
+):
     """Execute a specific tool"""
     # TODO: Integrate with tool execution system
-    return ToolExecutionResponse(
-        tool_name=request.tool_name,
-        result={"message": "Tool execution not yet implemented"},
-        status="pending",
-        execution_time=0.0,
-    )
+
+    session_id = request.session_id or f"tool_session_{current_user.id}"
+
+    try:
+        agent_client = await services.get_agent_client()
+        agent_response = await agent_client.execute_tool(
+            request.tool_name,
+            request.parameters,
+            session_id,
+        )
+
+        return ToolExecutionResponse(
+            tool_name=agent_response.get("tool_name", request.tool_name),
+            result=agent_response.get("result"),
+            status=agent_response.get("status", "success"),
+            execution_time=float(agent_response.get("execution_time", 0.0)),
+            metadata=agent_response.get("metadata", {}),
+        )
+
+    except Exception as e:
+        logger.error(
+            "Tool execution via /execute failed",
+            tool_name=request.tool_name,
+            session_id=session_id,
+            error=str(e),
+        )
+
+        # Safe fallback so tests and non-agent environments still work
+        return ToolExecutionResponse(
+            tool_name=request.tool_name,
+            result={
+                "message": "Tool execution not available",
+                "error": str(e),
+            },
+            status="error",
+            execution_time=0.0,
+            metadata={"error": True},
+        )
+
+
+@router.post("/{tool_name}/execute", response_model=ToolExecutionResponse)
+async def execute_named_tool(
+    tool_name: str,
+    request: ToolInvocationRequest,
+    current_user: User = Depends(get_current_active_user),
+):
+    """Execute a specific tool by name"""
+
+    session_id = request.session_id or f"tool_session_{current_user.id}"
+
+    try:
+        agent_client = await get_agent_client()
+        agent_response = await agent_client.execute_tool(
+            tool_name,
+            request.parameters,
+            session_id,
+        )
+
+        return ToolExecutionResponse(
+            tool_name=agent_response.get("tool_name", tool_name),
+            result=agent_response.get("result"),
+            status=agent_response.get("status", "success"),
+            execution_time=float(agent_response.get("execution_time", 0.0)),
+            metadata=agent_response.get("metadata", {}),
+        )
+
+    except Exception as e:
+        logger.error(
+            "Tool execution via /{tool_name}/execute failed",
+            tool_name=tool_name,
+            session_id=session_id,
+            error=str(e),
+        )
+
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": "Tool execution failed",
+                "tool_name": tool_name,
+                "message": str(e),
+            },
+        )
 
 
 @router.get("/{tool_name}/schema", response_model=ToolSchema)

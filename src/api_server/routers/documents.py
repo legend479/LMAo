@@ -296,6 +296,7 @@ async def get_document_info(
 
     try:
         from src.shared.database import DocumentOperations
+        from src.shared.services import get_rag_client
 
         document = DocumentOperations.get_document_by_id(document_id)
 
@@ -346,12 +347,35 @@ async def delete_document(
         if file_path.exists():
             file_path.unlink()
 
-        # TODO: Remove from RAG pipeline/vector store
+        # Remove from RAG pipeline/vector store
+        try:
+            rag_client = await get_rag_client()
+            rag_result = await rag_client.delete_document(document_id)
+
+            if not rag_result.get("success", False):
+                logger.warning(
+                    "RAG document deletion reported failure",
+                    document_id=document_id,
+                    error=rag_result.get("error"),
+                )
+        except Exception as e:
+            logger.error(
+                "Failed to delete document from RAG pipeline",
+                document_id=document_id,
+                error=str(e),
+            )
 
         # Delete from database
-        # Note: This would need to be implemented in DocumentOperations
+        deleted = DocumentOperations.delete_document(document_id)
+        if not deleted:
+            logger.warning(
+                "Document deletion from database reported failure",
+                document_id=document_id,
+            )
 
-        logger.info(f"Document {document_id} deleted", user_id=current_user.id)
+        logger.info(
+            "Document deleted", document_id=document_id, user_id=current_user.id
+        )
 
         return {"message": "Document deleted successfully"}
 

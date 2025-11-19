@@ -5,6 +5,8 @@ HTTP clients and service discovery for inter-service communication
 
 import httpx
 import asyncio
+import os
+import json
 from typing import Dict, Any, Optional
 from datetime import datetime
 
@@ -30,7 +32,6 @@ class ServiceClient:
                 timeout=self.timeout,
                 headers={
                     "User-Agent": "SE-SME-Agent-API/1.0",
-                    "Content-Type": "application/json",
                 },
             )
         return self._client
@@ -156,15 +157,40 @@ class RAGServiceClient(ServiceClient):
         try:
             client = await self._get_client()
 
-            payload = {"file_path": file_path, "metadata": metadata or {}}
+            # Read file contents for multipart upload
+            if not os.path.exists(file_path):
+                raise FileNotFoundError(f"File not found for ingestion: {file_path}")
 
-            response = await client.post("/ingest", json=payload)
+            file_name = os.path.basename(file_path)
+
+            with open(file_path, "rb") as f:
+                file_bytes = f.read()
+
+            # RAG /ingest expects: file: UploadFile, metadata: JSON string
+            files = {"file": (file_name, file_bytes)}
+            data = {"metadata": json.dumps(metadata or {})}
+
+            response = await client.post("/ingest", files=files, data=data)
             response.raise_for_status()
 
             return response.json()
 
         except Exception as e:
             logger.error(f"Document ingestion failed: {e}")
+            raise
+
+    async def delete_document(self, document_id: str) -> Dict[str, Any]:
+        """Delete document from RAG pipeline"""
+        try:
+            client = await self._get_client()
+
+            response = await client.delete(f"/documents/{document_id}")
+            response.raise_for_status()
+
+            return response.json()
+
+        except Exception as e:
+            logger.error(f"RAG document deletion failed: {e}")
             raise
 
 

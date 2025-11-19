@@ -20,6 +20,7 @@ from .registry import (
 # Import RAG pipeline dynamically to avoid circular imports
 # from src.rag_pipeline.main import get_rag_pipeline
 from src.shared.logging import get_logger
+from src.shared.services import get_rag_client
 
 logger = get_logger(__name__)
 
@@ -364,7 +365,7 @@ class KnowledgeRetrievalTool(BaseTool):
 
     def __init__(self, config: Dict[str, Any] = None):
         super().__init__(config)
-        self.rag_pipeline = None
+        self.rag_client = None
         self.scope_detector = ScopeDetector()
         self.cache = {}
         self.cache_ttl = 300  # 5 minutes cache TTL
@@ -376,13 +377,11 @@ class KnowledgeRetrievalTool(BaseTool):
 
         # Initialize RAG pipeline connection (dynamic import to avoid circular imports)
         try:
-            from src.rag_pipeline.main import get_rag_pipeline
-
-            self.rag_pipeline = await get_rag_pipeline()
-            logger.info("RAG pipeline connected successfully")
+            self.rag_client = await get_rag_client()
+            logger.info("RAG service client initialized successfully")
         except Exception as e:
-            logger.warning(f"Failed to connect to RAG pipeline: {e}")
-            self.rag_pipeline = None
+            logger.warning(f"Failed to initialize RAG service client: {e}")
+            self.rag_client = None
 
         logger.info("Enhanced Knowledge Retrieval Tool initialized")
 
@@ -428,7 +427,7 @@ class KnowledgeRetrievalTool(BaseTool):
                 return cached_result
 
             # Step 4: Execute RAG pipeline search
-            if self.rag_pipeline:
+            if self.rag_client:
                 search_result = await self._execute_rag_search(
                     query, filters, max_results, rerank
                 )
@@ -538,7 +537,7 @@ class KnowledgeRetrievalTool(BaseTool):
                 resource_usage={
                     "cpu_usage": 0.4,
                     "memory_usage_mb": 256,
-                    "network_requests": 1 if self.rag_pipeline else 0,
+                    "network_requests": 1 if self.rag_client else 0,
                 },
                 quality_score=relevance_score,
                 confidence_score=confidence_score,
@@ -1004,21 +1003,19 @@ class KnowledgeRetrievalTool(BaseTool):
         """Execute search using RAG pipeline"""
 
         try:
-            # Ensure RAG pipeline is available
-            if not self.rag_pipeline:
+            # Ensure RAG client is available
+            if not self.rag_client:
                 try:
-                    from src.rag_pipeline.main import get_rag_pipeline
-
-                    self.rag_pipeline = await get_rag_pipeline()
+                    self.rag_client = await get_rag_client()
                 except Exception as e:
-                    logger.error(f"Failed to initialize RAG pipeline: {e}")
-                    raise RuntimeError("RAG pipeline not available")
+                    logger.error(f"Failed to initialize RAG service client: {e}")
+                    raise RuntimeError("RAG service not available")
 
             # Determine search type based on filters and preferences
             search_type = "hybrid"  # Default to hybrid search
 
             # Execute search
-            search_result = await self.rag_pipeline.search(
+            search_result = await self.rag_client.search(
                 query=query,
                 filters=filters,
                 max_results=max_results,
@@ -1283,14 +1280,14 @@ class KnowledgeRetrievalTool(BaseTool):
         self.cache.clear()
 
         # Cleanup RAG pipeline connections if needed
-        if self.rag_pipeline:
+        if self.rag_client:
             try:
                 # RAG pipeline cleanup is handled by the pipeline itself
                 pass
             except Exception as e:
                 logger.warning(f"Error during RAG pipeline cleanup: {e}")
 
-        self.rag_pipeline = None
+        self.rag_client = None
 
     def _generate_result_summary(
         self, search_result: Dict[str, Any], query: str

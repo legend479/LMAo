@@ -24,8 +24,10 @@ from langchain_core.runnables import RunnableConfig
 from src.shared.logging import get_logger
 from src.shared.config import get_settings
 from src.shared.llm.integration import get_llm_integration
+from src.shared.services import get_rag_client
 
 logger = get_logger(__name__)
+
 
 def merge_dicts(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
     """Safely merge two dictionaries for LangGraph state updates"""
@@ -34,6 +36,7 @@ def merge_dicts(a: Dict[str, Any], b: Dict[str, Any]) -> Dict[str, Any]:
     if b is None:
         return a or {}
     return {**a, **b}
+
 
 class ExecutionState(Enum):
     PENDING = "pending"
@@ -149,6 +152,7 @@ class LangGraphOrchestrator:
         )  # Track workflow creation time
         self.llm_integration = None
         self.tool_registry = None  # Will be set by AgentServer
+        self.rag_client = None
         self._initialized = False
 
         # Workflow cleanup configuration
@@ -727,26 +731,32 @@ class LangGraphOrchestrator:
                         # Extract key information from dependency
                         if isinstance(dep_result, dict):
                             if "result" in dep_result:
-                                dependency_context[f"{dep_id}_result"] = dep_result["result"]
+                                dependency_context[f"{dep_id}_result"] = dep_result[
+                                    "result"
+                                ]
                             if "data" in dep_result:
-                                dependency_context[f"{dep_id}_data"] = dep_result["data"]
+                                dependency_context[f"{dep_id}_data"] = dep_result[
+                                    "data"
+                                ]
 
                 # --- RESOLVE PARAMETERS ---
                 # Create a context combining task results and direct dependency info
                 resolution_context = {**state.task_results, **dependency_context}
 
                 logger.info(
-                    f"Resolving parameters for {task_id}", 
+                    f"Resolving parameters for {task_id}",
                     available_context_keys=list(resolution_context.keys()),
-                    task_results_count=len(state.task_results)
+                    task_results_count=len(state.task_results),
                 )
-                
+
                 # Get raw parameters
                 raw_params = task.get("parameters", {})
-                
+
                 # Resolve placeholders
-                resolved_params = self._resolve_parameters(raw_params, resolution_context)
-                
+                resolved_params = self._resolve_parameters(
+                    raw_params, resolution_context
+                )
+
                 # Create a task copy with resolved parameters
                 task_with_resolved_params = task.copy()
                 task_with_resolved_params["parameters"] = resolved_params
@@ -755,7 +765,9 @@ class LangGraphOrchestrator:
                 if dependency_context:
                     if "parameters" not in task_with_resolved_params:
                         task_with_resolved_params["parameters"] = {}
-                    task_with_resolved_params["parameters"]["_dependency_context"] = dependency_context
+                    task_with_resolved_params["parameters"][
+                        "_dependency_context"
+                    ] = dependency_context
 
                     # Also add to task context for direct access
                     if "context" not in task_with_resolved_params:
@@ -770,14 +782,20 @@ class LangGraphOrchestrator:
 
                 # Execute based on task type using the RESOLVED task parameters
                 if task_type == "tool_execution":
-                    result = await self._execute_tool_task(task_with_resolved_params, state)
+                    result = await self._execute_tool_task(
+                        task_with_resolved_params, state
+                    )
                 elif task_type == "content_generation":
                     # Merge params into top-level for internal handlers that look for specific keys
                     task_merged = {**task_with_resolved_params, **resolved_params}
-                    result = await self._execute_content_generation_task(task_merged, state)
+                    result = await self._execute_content_generation_task(
+                        task_merged, state
+                    )
                 elif task_type == "code_generation":
                     task_merged = {**task_with_resolved_params, **resolved_params}
-                    result = await self._execute_code_generation_task(task_merged, state)
+                    result = await self._execute_code_generation_task(
+                        task_merged, state
+                    )
                 elif task_type == "analysis":
                     task_merged = {**task_with_resolved_params, **resolved_params}
                     result = await self._execute_analysis_task(task_merged, state)
@@ -1264,7 +1282,7 @@ class LangGraphOrchestrator:
     def _find_entry_tasks(self, plan: ExecutionPlan) -> List[str]:
         """Find tasks that have no dependencies (entry points)"""
         entry_tasks = []
-        
+
         for task in plan.tasks:
             task_id = task["id"]
             # FIX: A task is an entry point if it has NO prerequisites
@@ -1272,7 +1290,7 @@ class LangGraphOrchestrator:
             deps = plan.dependencies.get(task_id, [])
             if not deps:
                 entry_tasks.append(task_id)
-                
+
         return entry_tasks
 
     async def _execute_tool_task(
@@ -1395,17 +1413,12 @@ class LangGraphOrchestrator:
             query = task.get("query", task.get("parameters", {}).get("query", ""))
             max_results = task.get("max_results", 5)
 
-            # Import RAG pipeline here to avoid circular imports
-            from src.rag_pipeline.main import RAGPipeline
+            # Initialize RAG client if not already done
+            if not self.rag_client:
+                self.rag_client = await get_rag_client()
 
-            # Initialize RAG pipeline if not already done (use singleton)
-            if not hasattr(self, "rag_pipeline") or self.rag_pipeline is None:
-                from src.rag_pipeline.main import get_rag_pipeline
-
-                self.rag_pipeline = await get_rag_pipeline()
-
-            # Perform search
-            search_results = await self.rag_pipeline.search(
+            # Perform search through RAG HTTP service
+            search_results = await self.rag_client.search(
                 query=query, max_results=max_results
             )
 
@@ -2095,23 +2108,27 @@ Provide accurate and useful responses that build on the ongoing discussion.
                     return result_data
 
         return None
-    
-    def _resolve_parameters(self, parameters: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
+
+    def _resolve_parameters(
+        self, parameters: Dict[str, Any], context: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """Resolve parameter placeholders (e.g., '{{ task_1.result }}') using context"""
         resolved = parameters.copy()
-        
+
         for key, value in resolved.items():
             if isinstance(value, str) and "{{" in value and "}}" in value:
                 if value.strip().startswith("{{") and value.strip().endswith("}}"):
                     var_path = value.strip()[2:-2].strip()
                     resolved_value = self._get_context_value(var_path, context)
-                    
+
                     if resolved_value is not None:
                         resolved[key] = resolved_value
-                        logger.debug(f"Resolved parameter {key}: {var_path} -> value of length {len(str(resolved_value))}")
+                        logger.debug(
+                            f"Resolved parameter {key}: {var_path} -> value of length {len(str(resolved_value))}"
+                        )
                     else:
                         logger.warning(f"Could not resolve parameter {key}: {var_path}")
-        
+
         return resolved
 
     def _get_context_value(self, path: str, context: Dict[str, Any]) -> Any:
@@ -2158,7 +2175,7 @@ Provide accurate and useful responses that build on the ongoing discussion.
 
             if content is not None and not isinstance(content, str):
                 content = str(content)
-            
+
             # Fallback: If result is a dict but we couldn't extract specific fields, use the whole dict
             if content is None and result_data:
                 content = str(result_data)
