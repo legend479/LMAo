@@ -375,17 +375,21 @@ class AdaptivePlanningEngine:
             return None
 
         # Create new plan with recovery tasks
+        # Create a recovery plan. Do NOT copy the original plan's recovery_strategies
+        # into the recovery plan itself. Doing so may cause duplicate recovery node
+        # creation when the orchestrator builds the workflow (nodes are named
+        # `recovery_<task_id>`). Keep recovery_strategies empty for the recovery
+        # plan to avoid duplicate node IDs; the recovery tasks themselves are
+        # explicit tasks to execute.
         recovery_plan = ExecutionPlan(
             plan_id=f"{original_plan.plan_id}_recovery",
             tasks=recovery_tasks,
-            dependencies={
-                task["id"]: [] for task in recovery_tasks
-            },  # Independent tasks
+            dependencies={task["id"]: [] for task in recovery_tasks},
             estimated_duration=sum(
                 task.get("estimated_duration", 2.0) for task in recovery_tasks
             ),
-            priority=original_plan.priority + 1,  # Higher priority for recovery
-            recovery_strategies=original_plan.recovery_strategies,
+            priority=original_plan.priority + 1,
+            recovery_strategies={},
             parallel_groups=[],
         )
 

@@ -960,16 +960,25 @@ class LangGraphOrchestrator:
     ):
         """Add error handling and recovery nodes to workflow"""
 
-        # Add global error handler
-        workflow.add_node("error_handler", self._create_error_handler())
+        # Add global error handler (tolerate existing node)
+        try:
+            workflow.add_node("error_handler", self._create_error_handler())
+        except ValueError:
+            logger.debug("Error handler node already present, skipping add_node")
 
         # Add recovery strategies if defined
         if plan.recovery_strategies:
             for task_id, recovery_config in plan.recovery_strategies.items():
                 recovery_node_id = f"recovery_{task_id}"
-                workflow.add_node(
-                    recovery_node_id, self._create_recovery_node(recovery_config)
-                )
+                try:
+                    workflow.add_node(
+                        recovery_node_id, self._create_recovery_node(recovery_config)
+                    )
+                except ValueError:
+                    # Node already exists (e.g., recovery task already added to plan)
+                    logger.debug(
+                        f"Recovery node {recovery_node_id} already present, skipping add_node"
+                    )
 
                 # Create conditional edge function for this specific task
                 def create_recovery_condition(task_id):
