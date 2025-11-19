@@ -14,6 +14,7 @@ import { RootState } from '../store/store';
 import UserManagement from '../components/admin/UserManagement';
 import SystemConfigurationComponent from '../components/admin/SystemConfiguration';
 import AnalyticsDashboard from '../components/analytics/AnalyticsDashboard';
+import ToolsAdmin from '../components/admin/ToolsAdmin';
 import { systemService, UsageAnalytics, SystemConfiguration } from '../services/systemService';
 import { User } from '../types';
 
@@ -192,6 +193,7 @@ const AdminDashboard: React.FC = () => {
           <Tab label="User Management" />
           <Tab label="System Configuration" />
           <Tab label="Analytics" />
+          <Tab label="Tools" />
         </Tabs>
 
         <TabPanel value={tabValue} index={0}>
@@ -229,6 +231,10 @@ const AdminDashboard: React.FC = () => {
               loading={loading}
             />
           )}
+        </TabPanel>
+
+        <TabPanel value={tabValue} index={3}>
+          <ToolsAdmin />
         </TabPanel>
       </Paper>
 

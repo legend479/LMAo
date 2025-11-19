@@ -17,6 +17,7 @@ from .middleware import security, logging, rate_limiting, validation, compressio
 
 from src.shared.config import get_settings, validate_config
 from src.shared.logging import get_logger
+from src.shared.database import initialize_database, close_database_connections
 
 logger = get_logger(__name__)
 
@@ -130,11 +131,13 @@ class APIServer:
     async def _initialize_database(self):
         """Initialize database connections"""
         try:
-            # TODO: Initialize actual database connection pool
+            await initialize_database()
             logger.info("Database connections initialized")
         except Exception as e:
             logger.error("Failed to initialize database", error=str(e))
-            raise
+            # Only fail hard in production; in other environments, log and continue
+            if self.settings.environment == "production":
+                raise
 
     async def _initialize_redis(self):
         """Initialize Redis connections"""
@@ -186,7 +189,7 @@ class APIServer:
     async def _cleanup_database(self):
         """Cleanup database connections"""
         try:
-            # TODO: Close database connection pool
+            close_database_connections()
             logger.info("Database connections closed")
         except Exception as e:
             logger.error("Error closing database connections", error=str(e))

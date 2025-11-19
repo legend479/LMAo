@@ -103,11 +103,12 @@ class SessionOperations:
         title: Optional[str] = None,
         session_type: str = "conversation",
         context: Optional[Dict[str, Any]] = None,
+        session_id: Optional[str] = None,
     ) -> DBSession:
         """Create a new session"""
         with database_session_scope() as session:
             db_session = DBSession(
-                id=str(uuid.uuid4()),
+                id=session_id or str(uuid.uuid4()),
                 user_id=user_id,
                 title=title,
                 session_type=session_type,

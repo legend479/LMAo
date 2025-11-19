@@ -3,7 +3,7 @@ Agent Server Main Module
 Core orchestration engine managing conversations and tool execution
 """
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from datetime import datetime
 
 from .orchestrator import LangGraphOrchestrator
@@ -26,6 +26,9 @@ class AgentServer:
         self.memory_manager = MemoryManager()
         self.tool_registry = ToolExecutionRegistry()
 
+        # Multi-step reasoning engine
+        self.reasoning_engine = None
+
         # Feedback and learning components
         self.feedback_collector = None
         self.feedback_analyzer = None
@@ -34,6 +37,7 @@ class AgentServer:
         # Feature flags
         self.enable_feedback = True
         self.enable_learning = True
+        self.enable_multi_step_reasoning = True
 
         self._initialized = False
 
@@ -68,7 +72,16 @@ class AgentServer:
             await self.memory_manager.initialize()
             logger.info("Memory manager initialized")
 
-            # Step 6: Initialize feedback and learning systems
+            # Step 6: Initialize multi-step reasoning engine
+            if self.enable_multi_step_reasoning and self.orchestrator.adaptive_engine:
+                from .multi_step_reasoning import MultiStepReasoningEngine
+
+                self.reasoning_engine = MultiStepReasoningEngine(
+                    self.orchestrator, self.orchestrator.adaptive_engine
+                )
+                logger.info("Multi-step reasoning engine initialized")
+
+            # Step 7: Initialize feedback and learning systems
             if self.enable_feedback:
                 from .feedback_system import FeedbackCollector, FeedbackAnalyzer
 
@@ -97,7 +110,7 @@ class AgentServer:
     async def process_message(
         self, message: str, session_id: str, user_id: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Process a user message through the agent pipeline"""
+        """Process a user message through the agent pipeline with multi-step reasoning support"""
         if not self._initialized:
             await self.initialize()
 
@@ -110,10 +123,33 @@ class AgentServer:
             # Create execution plan
             plan = await self.planning_module.create_plan(message, context)
 
-            # Execute plan through orchestrator with original query for synthesis
-            result = await self.orchestrator.execute_plan(
-                plan, session_id, original_query=message
-            )
+            # Check if this requires multi-step reasoning
+            requires_multi_step = self._requires_multi_step_reasoning(plan, message)
+
+            if requires_multi_step and self.reasoning_engine:
+                logger.info("Using multi-step reasoning for complex query")
+
+                # Create reasoning chain
+                reasoning_chain = await self.reasoning_engine.create_reasoning_chain(
+                    goal=message,
+                    initial_context={"plan": plan, "conversation_context": context},
+                    session_id=session_id,
+                )
+
+                # Execute reasoning chain
+                reasoning_result = await self.reasoning_engine.execute_reasoning_chain(
+                    reasoning_chain, session_id
+                )
+
+                # Convert reasoning result to standard format
+                result = self._convert_reasoning_result_to_execution_result(
+                    reasoning_result, plan, session_id
+                )
+            else:
+                # Standard execution through orchestrator
+                result = await self.orchestrator.execute_plan(
+                    plan, session_id, original_query=message
+                )
 
             # Store conversation state
             await self.memory_manager.store_interaction(
@@ -137,6 +173,113 @@ class AgentServer:
                 "timestamp": datetime.utcnow().isoformat(),
                 "metadata": {"error": True, "error_type": type(e).__name__},
             }
+
+    def _requires_multi_step_reasoning(self, plan, message: str) -> bool:
+        """Determine if a query requires multi-step reasoning"""
+
+        # Check for multi-step indicators in message
+        multi_step_indicators = [
+            "and then",
+            "after that",
+            "next",
+            "also",
+            "additionally",
+            "first",
+            "second",
+            "finally",
+            "step by step",
+        ]
+
+        message_lower = message.lower()
+        has_indicators = any(
+            indicator in message_lower for indicator in multi_step_indicators
+        )
+
+        # Check if plan has many tasks with complex dependencies
+        has_complex_plan = len(plan.tasks) > 3
+
+        # Check for analysis or synthesis tasks
+        has_reasoning_tasks = any(
+            task.get("type") in ["analysis", "planning", "synthesis"]
+            for task in plan.tasks
+        )
+
+        return has_indicators or (has_complex_plan and has_reasoning_tasks)
+
+    def _convert_reasoning_result_to_execution_result(
+        self, reasoning_result: Dict[str, Any], plan, session_id: str
+    ):
+        """Convert reasoning chain result to ExecutionResult format"""
+
+        from .orchestrator import ExecutionResult, ExecutionState
+
+        # Extract results from reasoning chain
+        results = reasoning_result.get("results", [])
+
+        # Build tool results
+        tool_results = []
+        for i, result in enumerate(results):
+            tool_results.append(
+                {
+                    "task_id": f"reasoning_step_{i+1}",
+                    "result": result,
+                    "timestamp": datetime.utcnow().isoformat(),
+                }
+            )
+
+        # Generate response from final context
+        final_context = reasoning_result.get("final_context", {})
+        response = self._synthesize_reasoning_response(
+            reasoning_result.get("goal", ""), results, final_context
+        )
+
+        # Determine state
+        state = (
+            ExecutionState.COMPLETED
+            if reasoning_result.get("completed")
+            else ExecutionState.FAILED
+        )
+
+        return ExecutionResult(
+            response=response,
+            metadata={
+                "reasoning_chain_id": reasoning_result.get("chain_id"),
+                "steps_completed": reasoning_result.get("steps_completed", 0),
+                "total_steps": reasoning_result.get("total_steps", 0),
+                "multi_step_reasoning": True,
+                "plan_id": plan.plan_id,
+            },
+            execution_time=0.0,  # Would need to track this
+            state=state,
+            tool_results=tool_results,
+            execution_path=[f"reasoning_step_{i+1}" for i in range(len(results))],
+        )
+
+    def _synthesize_reasoning_response(
+        self, goal: str, results: List[Dict[str, Any]], context: Dict[str, Any]
+    ) -> str:
+        """Synthesize a coherent response from reasoning chain results"""
+
+        if not results:
+            return f"I've analyzed your request: '{goal}', but couldn't complete all reasoning steps."
+
+        # Extract meaningful content from results
+        response_parts = []
+
+        for i, result in enumerate(results):
+            if isinstance(result, dict):
+                result_content = result.get("result", "")
+                if isinstance(result_content, str) and len(result_content) > 20:
+                    response_parts.append(result_content)
+
+        if response_parts:
+            # Combine results coherently
+            if len(response_parts) == 1:
+                return response_parts[0]
+            else:
+                return "\n\n".join(response_parts)
+
+        return f"I've completed the multi-step analysis for: '{goal}'"
 
     async def get_available_tools(self) -> Dict[str, Any]:
         """Get list of available tools"""

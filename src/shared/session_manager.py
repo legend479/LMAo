@@ -9,7 +9,12 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 from dataclasses import dataclass, asdict
 
-from .database import SessionOperations, UserOperations, database_session_scope
+from .database import (
+    SessionOperations,
+    UserOperations,
+    database_session_scope,
+    Session as DBSession,
+)
 from .logging import get_logger
 
 logger = get_logger(__name__)
@@ -49,10 +54,11 @@ class SessionManager:
         session_type: str = "conversation",
         title: Optional[str] = None,
         context: Optional[Dict[str, Any]] = None,
+        session_id: Optional[str] = None,
     ) -> SessionInfo:
         """Create a new session"""
 
-        session_id = str(uuid.uuid4())
+        session_id = session_id or str(uuid.uuid4())
         now = datetime.utcnow()
 
         # Create session info
@@ -80,6 +86,7 @@ class SessionManager:
                 title=title,
                 session_type=session_type,
                 context=context or {},
+                session_id=session_id,
             )
 
             # Update session_id to match database
@@ -174,11 +181,14 @@ class SessionManager:
         """Update session context"""
 
         if session_id in self.active_sessions:
+            # Merge into in-memory context first
             self.active_sessions[session_id].context.update(context)
 
-            # Update in database
+            # Update in database with full context
             try:
-                SessionOperations.update_session_context(session_id, context)
+                SessionOperations.update_session_context(
+                    session_id, self.active_sessions[session_id].context
+                )
                 return True
             except Exception as e:
                 logger.error(f"Failed to update session context in database: {e}")
@@ -252,9 +262,7 @@ class SessionManager:
             try:
                 with database_session_scope() as db_session:
                     db_session_obj = (
-                        db_session.query(SessionOperations.Session)
-                        .filter_by(id=session_id)
-                        .first()
+                        db_session.query(DBSession).filter_by(id=session_id).first()
                     )
 
                     if db_session_obj:

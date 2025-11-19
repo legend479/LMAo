@@ -10,6 +10,8 @@ import re
 from enum import Enum
 
 from .orchestrator import ExecutionPlan
+from .tool_intent_mapper import ToolIntentMapper, EnhancedIntentType
+from .prompt_templates import PromptTemplates, PromptType as TemplatePromptType
 from src.shared.logging import get_logger
 from src.shared.llm.integration import get_llm_integration
 
@@ -105,12 +107,17 @@ class PlanningModule:
     def __init__(self):
         self._initialized = False
         self.llm_integration = None
+        self.tool_intent_mapper = ToolIntentMapper()
+        self.prompt_templates = PromptTemplates()
         self.intent_patterns = self._initialize_intent_patterns()
         self.entity_patterns = self._initialize_entity_patterns()
         self.task_templates = self._initialize_task_templates()
         self.complexity_indicators = self._initialize_complexity_indicators()
         self.domain_keywords = self._initialize_domain_keywords()
         self.planning_strategies = self._initialize_planning_strategies()
+        self.use_enhanced_planning = (
+            True  # Feature flag for enhanced tool-aware planning
+        )
 
     async def initialize(self):
         """Initialize planning components"""
@@ -134,11 +141,26 @@ class PlanningModule:
     async def create_plan(
         self, message: str, context: ConversationContext
     ) -> ExecutionPlan:
-        """Create comprehensive execution plan from user message"""
+        """Create comprehensive execution plan from user message with enhanced tool-aware planning"""
         logger.info(
-            "Creating comprehensive execution plan", session_id=context.session_id
+            "Creating comprehensive execution plan",
+            session_id=context.session_id,
+            enhanced_mode=self.use_enhanced_planning,
         )
 
+        # Try enhanced tool-aware planning first
+        if self.use_enhanced_planning:
+            try:
+                plan = await self._create_enhanced_plan(message, context)
+                if plan:
+                    logger.info("Using enhanced tool-aware planning")
+                    return plan
+            except Exception as e:
+                logger.warning(
+                    f"Enhanced planning failed, falling back to standard: {e}"
+                )
+
+        # Fallback to standard planning
         # Step 1: Comprehensive query analysis
         analysis = await self._analyze_query_comprehensive(message, context)
 
@@ -182,6 +204,178 @@ class PlanningModule:
         )
 
         return plan
+
+    async def _create_enhanced_plan(
+        self, message: str, context: ConversationContext
+    ) -> Optional[ExecutionPlan]:
+        """Create execution plan using enhanced tool-aware intent classification"""
+
+        # Enhanced intent classification with tool mapping
+        intent_match = self.tool_intent_mapper.classify_intent(
+            message, context={"history": context.message_history}
+        )
+
+        logger.info(
+            "Enhanced intent classified",
+            primary_intent=intent_match.primary_intent.value,
+            confidence=intent_match.confidence,
+            suggested_tools=intent_match.suggested_tools,
+            reasoning=intent_match.reasoning,
+        )
+
+        # Create tasks based on tool sequence
+        tasks = []
+        dependencies = {}
+
+        for i, (tool_name, tool_params) in enumerate(intent_match.tool_sequence):
+            task_id = f"task_{i+1}"
+
+            # Extract additional parameters from message
+            extracted_params = self.tool_intent_mapper.get_tool_parameters(
+                tool_name, message, context
+            )
+
+            # Merge parameters
+            parameters = {**tool_params, **extracted_params}
+
+            # Add query/description to parameters based on tool type
+            if "query" not in parameters and tool_name in [
+                "knowledge_retrieval",
+                "rag_search",
+            ]:
+                parameters["query"] = message
+            elif "description" not in parameters and tool_name == "code_generation":
+                parameters["description"] = message
+            elif "topic" not in parameters and tool_name == "content_generation":
+                parameters["topic"] = message
+
+            # Determine task type
+            task_type = self._map_tool_to_task_type(tool_name)
+
+            # Create task with enhanced parameters
+            task = {
+                "id": task_id,
+                "name": f"{tool_name}_task",
+                "type": task_type,
+                "tool": tool_name if task_type == "tool_execution" else None,
+                "parameters": parameters,
+                "priority": 1,
+                "estimated_duration": self._estimate_tool_duration(tool_name),
+                "intent": intent_match.primary_intent.value,
+            }
+
+            tasks.append(task)
+
+            # Set up dependencies (sequential by default)
+            if i > 0:
+                dependencies[task_id] = [f"task_{i}"]
+
+                # Handle parameter injection from previous task
+                if tool_params.get("content_from_previous") or tool_params.get(
+                    "code_from_previous"
+                ):
+                    prev_task_id = f"task_{i}"
+                    parameters["content"] = f"{{{{ {prev_task_id}.result }}}}"
+            else:
+                dependencies[task_id] = []
+
+        # Calculate estimated duration
+        estimated_duration = sum(task["estimated_duration"] for task in tasks)
+
+        # Create execution plan
+        plan = ExecutionPlan(
+            plan_id=str(uuid.uuid4()),
+            tasks=tasks,
+            dependencies=dependencies,
+            estimated_duration=estimated_duration,
+            priority=1,
+            recovery_strategies=self._create_enhanced_recovery_strategies(tasks),
+            parallel_groups=self._identify_parallel_groups_simple(tasks, dependencies),
+        )
+
+        logger.info(
+            "Enhanced execution plan created",
+            plan_id=plan.plan_id,
+            task_count=len(tasks),
+            estimated_duration=estimated_duration,
+            intent=intent_match.primary_intent.value,
+        )
+
+        return plan
+
+    def _map_tool_to_task_type(self, tool_name: str) -> str:
+        """Map tool name to task type"""
+        mapping = {
+            "knowledge_retrieval": "tool_execution",
+            "rag_search": "tool_execution",
+            "code_generation": "code_generation",
+            "compiler_runtime": "tool_execution",
+            "content_generation": "content_generation",
+            "document_generation": "tool_execution",
+            "email_automation": "tool_execution",
+            "general_processing": "general_processing",
+        }
+        return mapping.get(tool_name, "tool_execution")
+
+    def _estimate_tool_duration(self, tool_name: str) -> float:
+        """Estimate task duration based on tool"""
+        durations = {
+            "knowledge_retrieval": 2.0,
+            "rag_search": 2.0,
+            "code_generation": 5.0,
+            "compiler_runtime": 3.0,
+            "content_generation": 4.0,
+            "document_generation": 2.0,
+            "email_automation": 1.5,
+            "general_processing": 1.0,
+        }
+        return durations.get(tool_name, 2.0)
+
+    def _create_enhanced_recovery_strategies(
+        self, tasks: List[Dict[str, Any]]
+    ) -> Dict[str, Dict[str, Any]]:
+        """Create recovery strategies for enhanced tasks"""
+        strategies = {}
+
+        for task in tasks:
+            task_id = task["id"]
+            tool_name = task.get("tool", "")
+
+            if tool_name in ["compiler_runtime", "code_generation"]:
+                strategies[task_id] = {
+                    "strategy": "retry",
+                    "max_retries": 2,
+                    "backoff_delay": 1.0,
+                }
+            elif tool_name in ["email_automation", "document_generation"]:
+                strategies[task_id] = {
+                    "strategy": "fallback",
+                    "fallback_result": f"{tool_name} completed with fallback method",
+                }
+            else:
+                strategies[task_id] = {
+                    "strategy": "retry",
+                    "max_retries": 3,
+                    "backoff_delay": 0.5,
+                }
+
+        return strategies
+
+    def _identify_parallel_groups_simple(
+        self, tasks: List[Dict[str, Any]], dependencies: Dict[str, List[str]]
+    ) -> List[List[str]]:
+        """Identify tasks that can run in parallel (simplified)"""
+        parallel_groups = []
+
+        # Find tasks with no dependencies
+        independent_tasks = [
+            task["id"] for task in tasks if not dependencies.get(task["id"], [])
+        ]
+
+        if len(independent_tasks) > 1:
+            parallel_groups.append(independent_tasks)
+
+        return parallel_groups
 
     async def _analyze_query_comprehensive(
         self, message: str, context: ConversationContext
@@ -398,27 +592,58 @@ class PlanningModule:
         entities = []
         message_lower = message.lower()
 
-        # Programming language detection
+        # Programming language detection with proper word boundaries
         prog_languages = [
-            "python", "javascript", "java", "c++", "c#", "go", "rust",
-            "typescript", "php", "ruby"
+            "python",
+            "javascript",
+            "java",
+            "c++",
+            "c#",
+            "go",
+            "rust",
+            "typescript",
+            "php",
+            "ruby",
+            "kotlin",
+            "swift",
+            "scala",
         ]
         for lang in prog_languages:
-            # FIX: Use regex word boundaries to avoid partial matches (e.g., "go" in "good")
-            if re.search(r"\b" + re.escape(lang) + r"\b", message_lower):
-                entities.append(
-                    Entity(
-                        text=lang,
-                        entity_type=EntityType.PROGRAMMING_LANGUAGE,
-                        confidence=0.9,
-                        context="programming language mentioned",
+            # Use regex word boundaries to avoid partial matches (e.g., "go" in "good")
+            # Special handling for C++ and C# which contain special characters
+            if lang in ["c++", "c#"]:
+                # Exact match for special cases
+                if lang in message_lower:
+                    entities.append(
+                        Entity(
+                            text=lang,
+                            entity_type=EntityType.PROGRAMMING_LANGUAGE,
+                            confidence=0.95,
+                            context="programming language mentioned",
+                        )
                     )
-                )
+            else:
+                # Word boundary match for regular language names
+                if re.search(r"\b" + re.escape(lang) + r"\b", message_lower):
+                    entities.append(
+                        Entity(
+                            text=lang,
+                            entity_type=EntityType.PROGRAMMING_LANGUAGE,
+                            confidence=0.9,
+                            context="programming language mentioned",
+                        )
+                    )
 
         # Framework detection
         frameworks = [
-            "react", "angular", "vue", "django", "flask", "spring",
-            "express", "fastapi"
+            "react",
+            "angular",
+            "vue",
+            "django",
+            "flask",
+            "spring",
+            "express",
+            "fastapi",
         ]
         for framework in frameworks:
             if re.search(r"\b" + re.escape(framework) + r"\b", message_lower):
@@ -434,9 +659,9 @@ class PlanningModule:
         # File format detection
         file_formats = ["pdf", "docx", "pptx", "json", "xml", "csv", "yaml", "markdown"]
         for fmt in file_formats:
-             # Use simple containment for extensions as they might appear as filename.ext
-             # But purely for formats, word boundary is safer
-             if re.search(r"\b" + re.escape(fmt) + r"\b", message_lower):
+            # Use simple containment for extensions as they might appear as filename.ext
+            # But purely for formats, word boundary is safer
+            if re.search(r"\b" + re.escape(fmt) + r"\b", message_lower):
                 entities.append(
                     Entity(
                         text=fmt,
@@ -448,8 +673,14 @@ class PlanningModule:
 
         # Tool detection
         tools = [
-            "git", "docker", "kubernetes", "jenkins", "github", "gitlab",
-            "aws", "azure"
+            "git",
+            "docker",
+            "kubernetes",
+            "jenkins",
+            "github",
+            "gitlab",
+            "aws",
+            "azure",
         ]
         for tool in tools:
             if re.search(r"\b" + re.escape(tool) + r"\b", message_lower):
@@ -465,7 +696,10 @@ class PlanningModule:
         # Concept detection using regex patterns
         # (Keep existing logic for concept_patterns as it already uses regex)
         concept_patterns = [
-            (r"\b(design pattern|algorithm|data structure|architecture)\b", EntityType.CONCEPT),
+            (
+                r"\b(design pattern|algorithm|data structure|architecture)\b",
+                EntityType.CONCEPT,
+            ),
             (r"\b(testing|unit test|integration test|debugging)\b", EntityType.CONCEPT),
             (r"\b(api|rest|graphql|microservice)\b", EntityType.CONCEPT),
         ]
@@ -619,34 +853,42 @@ class PlanningModule:
 
         goals = []
 
-        # Goal patterns
+        # Goal patterns with proper capture groups
         goal_patterns = [
             (r"i want to (.+)", "User wants to {}"),
             (r"i need (.+)", "User needs {}"),
             (r"help me (.+)", "Help user {}"),
             (r"can you (.+)", "User requests to {}"),
             (r"please (.+)", "User requests to {}"),
-            # Add question patterns to catch "What is..." or "How to..."
-            (r"^(what|how|why|when|where) (.+)", "Explain {}"), 
+            (r"^(what|how|why|when|where) (.+)", "Explain: {}"),
+            (r"(create|generate|build|make|write) (.+)", "Create: {}"),
         ]
 
         for pattern, template in goal_patterns:
-            matches = re.finditer(pattern, message.lower())
+            matches = re.finditer(pattern, message.lower(), re.IGNORECASE)
             for match in matches:
-                # Catch the group but use the original message part for clarity if needed
-                # Or simply use the template structure
-                if "{}" in template:
-                    goal = template.format(match.group(1))
-                else:
-                    goal = template
-                goals.append(goal)
+                # Extract the relevant capture group
+                if match.lastindex and match.lastindex >= 1:
+                    # Use the last capture group (the actual content)
+                    captured_text = match.group(match.lastindex).strip()
+                    if captured_text and len(captured_text) > 2:
+                        goal = template.format(captured_text)
+                        goals.append(goal)
 
-        # If no explicit goals found, infer from intent and entities
+        # If no explicit goals found, use the original message as the goal
         if not goals:
-            # CRITICAL FIX: Use the original message as the primary goal 
-            # if no specific pattern is matched.
-            # Old logic: goals.append(f"Work with {entity_text}") caused errors
-            goals.append(message)
+            # Use the original message directly - this is the user's actual intent
+            goals.append(message.strip())
+
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_goals = []
+        for goal in goals:
+            if goal not in seen:
+                seen.add(goal)
+                unique_goals.append(goal)
+
+        return unique_goals
 
         return goals
 
@@ -1037,30 +1279,33 @@ class PlanningModule:
     def _create_document_generation_tasks(
         self, goal: Goal, analysis: QueryAnalysis, start_counter: int
     ) -> List[Dict[str, Any]]:
-        """Create tasks for document generation"""
-        
-        # 1. Define IDs so we can reference them
+        """Create tasks for document generation with proper content flow"""
+
+        # Define task IDs for reference
         content_task_id = f"task_{start_counter}"
         doc_task_id = f"task_{start_counter + 1}"
-        
+
         doc_format = self._detect_document_format(analysis.entities)
+        filename = self._extract_filename(goal.description, doc_format)
 
         tasks = [
-            # Task 1: Generate the text (The "Ink")
+            # Task 1: Generate the content (The "Ink")
             {
                 "id": content_task_id,
                 "name": "generate_content",
                 "type": "content_generation",
                 "parameters": {
-                    "topic": goal.description, 
+                    "topic": goal.description,
                     "for_document": True,
                     "format": doc_format,
+                    "content_type": "document_content",
+                    "audience": "professional",
                 },
                 "priority": goal.priority,
                 "estimated_duration": 3.0,
                 "goal_id": goal.goal_id,
             },
-            # Task 2: Create the PDF (The "Paper")
+            # Task 2: Create the document file (The "Paper")
             {
                 "id": doc_task_id,
                 "name": "generate_document",
@@ -1068,16 +1313,15 @@ class PlanningModule:
                 "tool": "document_generation",
                 "parameters": {
                     "format": doc_format,
-                    # CRITICAL FIX: This "{{ variable }}" syntax tells the 
-                    # Orchestrator to inject the result from the previous task
-                    "content": f"{{{{ {content_task_id}.result }}}}", 
-                    "filename": "software_principles.pdf" 
+                    # Use placeholder syntax for orchestrator to resolve
+                    # This will be replaced with actual content from previous task
+                    "content": f"{{{{ {content_task_id}.result }}}}",
+                    "filename": filename,
+                    "title": goal.description[:100],  # Use goal as title
                 },
                 "priority": goal.priority,
                 "estimated_duration": 2.0,
                 "goal_id": goal.goal_id,
-                # Force sequential order
-                "dependencies": [content_task_id], 
             },
         ]
 
@@ -1169,6 +1413,31 @@ class PlanningModule:
 
         return "docx"  # Default format
 
+    def _extract_filename(self, description: str, format: str) -> str:
+        """Extract filename from description or generate default"""
+        import re
+        from datetime import datetime
+
+        # Try to find "save as X" or "name it X" or "call it X"
+        patterns = [
+            r'(?:save as|name it|call it|filename)\s+["\']?([^"\']+)["\']?',
+            r'["\']([^"\']+\.(?:pdf|docx|pptx))["\']',
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, description, re.IGNORECASE)
+            if match:
+                filename = match.group(1).strip()
+                # Ensure it has the correct extension
+                if not filename.endswith(f".{format}"):
+                    # Remove any existing extension
+                    filename = re.sub(r"\.\w+$$", "", filename)
+                    filename += f".{format}"
+                return filename
+
+        # Default filename with timestamp
+        return f"document_{datetime.now().strftime('%Y%m%d_%H%M%S')}.{format}"
+
     async def _advanced_dependency_analysis(
         self, tasks: List[Dict[str, Any]], goals: List[Goal]
     ) -> Dict[str, List[str]]:
@@ -1240,6 +1509,13 @@ class PlanningModule:
         ):
             return True
 
+        # Document generation depends on content generation
+        if (
+            task1.get("name") == "generate_content"
+            and task2.get("name") == "generate_document"
+        ):
+            return True
+
         # Document generation depends on content preparation
         if (
             task1.get("name") == "prepare_content"
@@ -1259,12 +1535,20 @@ class PlanningModule:
             "parameters", {}
         ).get("data_dependent"):
             return True
-        
+
+        # Type-based dependency: content generation -> document generation
         if (
             task1.get("type") == "content_generation"
             and task2.get("tool") == "document_generation"
         ):
             return True
+
+        # Check if task2 parameters reference task1 (placeholder syntax)
+        task2_params = task2.get("parameters", {})
+        task1_id = task1.get("id", "")
+        for param_value in task2_params.values():
+            if isinstance(param_value, str) and task1_id in param_value:
+                return True
 
         return False
 

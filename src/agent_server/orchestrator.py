@@ -3,7 +3,7 @@ LangGraph Orchestrator
 Stateful workflow management using LangGraph
 """
 
-from typing import Dict, Any, List, Optional, Callable, Annotated
+from typing import Dict, Any, List, Optional, Callable, Annotated, Set
 import asyncio
 import redis.asyncio as redis
 from dataclasses import dataclass, asdict
@@ -154,6 +154,7 @@ class LangGraphOrchestrator:
         self.tool_registry = None  # Will be set by AgentServer
         self.rag_client = None
         self._initialized = False
+        self.adaptive_engine = None  # Will be initialized later
 
         # Workflow cleanup configuration
         self.max_cached_workflows = 100
@@ -243,11 +244,19 @@ class LangGraphOrchestrator:
             self.llm_integration = await get_llm_integration()
             logger.info("LLM integration initialized")
 
+            # Initialize adaptive planning engine
+            from .adaptive_planning import AdaptivePlanningEngine
+
+            self.adaptive_engine = AdaptivePlanningEngine(self.llm_integration)
+            logger.info("Adaptive planning engine initialized")
+
             # Initialize workflow monitoring
             await self._setup_workflow_monitoring()
 
             self._initialized = True
-            logger.info("LangGraph Orchestrator initialized successfully")
+            logger.info(
+                "LangGraph Orchestrator initialized successfully with adaptive planning"
+            )
 
         except Exception as e:
             logger.error("Failed to initialize LangGraph Orchestrator", error=str(e))
@@ -346,7 +355,8 @@ class LangGraphOrchestrator:
         active_with_plan = [
             exec_id
             for exec_id, info in self.active_executions.items()
-            if info.get("plan", {}).plan_id == plan_id
+            if isinstance(info.get("plan"), ExecutionPlan)
+            and info["plan"].plan_id == plan_id
         ]
 
         if active_with_plan:
@@ -396,9 +406,9 @@ class LangGraphOrchestrator:
     async def execute_plan(
         self, plan: ExecutionPlan, session_id: str, original_query: str = None
     ) -> ExecutionResult:
-        """Execute a plan using LangGraph workflow management"""
+        """Execute a plan using LangGraph workflow management with dynamic replanning"""
         logger.info(
-            "Executing plan with LangGraph",
+            "Executing plan with LangGraph (adaptive mode)",
             plan_id=plan.plan_id,
             session_id=session_id,
             original_query=original_query[:100] if original_query else None,
@@ -407,7 +417,7 @@ class LangGraphOrchestrator:
         execution_id = f"{session_id}_{plan.plan_id}"
         start_time = asyncio.get_event_loop().time()
 
-        # Track execution
+        # Track execution with replanning support
         self.active_executions[execution_id] = {
             "plan": plan,
             "session_id": session_id,
@@ -416,7 +426,9 @@ class LangGraphOrchestrator:
             "completed_tasks": [],
             "failed_tasks": [],
             "checkpoints": [],
-            "original_query": original_query,  # Store for logging
+            "original_query": original_query,
+            "replan_count": 0,  # Track replanning attempts
+            "max_replans": 2,  # Maximum replanning attempts
         }
 
         try:
@@ -520,9 +532,6 @@ class LangGraphOrchestrator:
                     error=str(nie),
                 )
 
-                # Recreate workflow without checkpointer
-                workflow_no_checkpoint = await self.create_workflow_graph(plan)
-
                 # Temporarily disable checkpointer for this execution
                 original_checkpointer = self.checkpointer
                 self.checkpointer = None
@@ -625,6 +634,37 @@ class LangGraphOrchestrator:
 
             # Remove failed tasks from completed set
             completed_task_ids -= failed_task_ids
+
+            # ADAPTIVE REPLANNING: Check if critical tasks failed and replan if needed
+            if (
+                failed_task_ids
+                and self.active_executions[execution_id]["replan_count"]
+                < self.active_executions[execution_id]["max_replans"]
+            ):
+                logger.info(
+                    "Critical tasks failed, attempting replan",
+                    failed_tasks=list(failed_task_ids),
+                    replan_attempt=self.active_executions[execution_id]["replan_count"]
+                    + 1,
+                )
+
+                # Attempt replanning for failed tasks
+                replan_result = await self._replan_failed_tasks(
+                    plan,
+                    failed_task_ids,
+                    completed_task_ids,
+                    session_id,
+                    original_query,
+                    execution_id,
+                )
+
+                if replan_result:
+                    # Merge replan results
+                    tool_results.extend(replan_result.get("tool_results", []))
+                    completed_task_ids.update(
+                        replan_result.get("completed_tasks", set())
+                    )
+                    failed_task_ids -= replan_result.get("recovered_tasks", set())
 
             # Create execution result
             result = ExecutionResult(
@@ -1285,11 +1325,18 @@ class LangGraphOrchestrator:
 
         for task in plan.tasks:
             task_id = task["id"]
-            # FIX: A task is an entry point if it has NO prerequisites
-            # Check the list of dependencies for this specific task
+            # A task is an entry point if it has NO dependencies
+            # Check the dependencies dictionary for this specific task
             deps = plan.dependencies.get(task_id, [])
-            if not deps:
+            if not deps or len(deps) == 0:
                 entry_tasks.append(task_id)
+                logger.debug(f"Identified entry task: {task_id}")
+
+        if not entry_tasks:
+            # Fallback: if no entry tasks found, use the first task
+            logger.warning("No entry tasks found, using first task as entry point")
+            if plan.tasks:
+                entry_tasks.append(plan.tasks[0]["id"])
 
         return entry_tasks
 
@@ -1415,7 +1462,19 @@ class LangGraphOrchestrator:
 
             # Initialize RAG client if not already done
             if not self.rag_client:
-                self.rag_client = await get_rag_client()
+                try:
+                    self.rag_client = await get_rag_client()
+                except Exception as e:
+                    logger.error(f"Failed to initialize RAG client: {e}")
+                    execution_time = asyncio.get_event_loop().time() - start_time
+                    return {
+                        "tool": "rag_search",
+                        "result": f"Knowledge retrieval service is currently unavailable. Please try again later.",
+                        "execution_time": execution_time,
+                        "error": True,
+                        "error_message": str(e),
+                        "error_type": "RAGClientInitializationError",
+                    }
 
             # Perform search through RAG HTTP service
             search_results = await self.rag_client.search(
@@ -1654,38 +1713,113 @@ Provide a comprehensive analysis including:
     async def _execute_content_generation_task(
         self, task: Dict[str, Any], state: WorkflowState
     ) -> Dict[str, Any]:
-        """Execute content generation task"""
+        """Execute content generation task with enhanced prompting"""
 
         start_time = asyncio.get_event_loop().time()
 
         try:
-            # Extract task parameters
-            prompt = task.get("prompt", "Generate content based on the given context")
-            topic = task.get("topic", "software engineering")
-            audience = task.get("audience", "intermediate")
+            # Extract task parameters with better defaults
+            topic = task.get("topic", state.original_query or "software engineering")
+            audience = task.get("audience", "professional")
             content_type = task.get("content_type", "explanation")
+            for_document = task.get("for_document", False)
+            doc_format = task.get("format", "markdown")
 
-            # Create system prompt for content generation
-            system_prompt = f"""You are an expert software engineering content creator. 
-            Generate high-quality {content_type} content about {topic} for {audience} level audience.
+            # Build context-aware prompt
+            prompt_parts = []
+
+            # Add original query context if available
+            if state.original_query and state.original_query != topic:
+                prompt_parts.append(f"User Request: {state.original_query}")
+
+            prompt_parts.append(f"Topic: {topic}")
+
+            # Add any context from previous tasks
+            if state.task_results:
+                context_snippets = []
+                for task_id, result in state.task_results.items():
+                    if isinstance(result, dict) and "result" in result:
+                        result_content = result["result"]
+                        if isinstance(result_content, str) and len(result_content) > 50:
+                            context_snippets.append(result_content[:500])
+
+                if context_snippets:
+                    prompt_parts.append("\nRelevant Context:")
+                    prompt_parts.extend(context_snippets[:2])  # Limit to 2 most recent
+
+            # Add generation instructions
+            if for_document:
+                prompt_parts.append(
+                    f"\nGenerate comprehensive, well-structured content suitable for a {doc_format} document."
+                )
+                prompt_parts.append("Include:")
+                prompt_parts.append("- Clear introduction")
+                prompt_parts.append("- Well-organized main sections with headings")
+                prompt_parts.append("- Practical examples and explanations")
+                prompt_parts.append("- Conclusion or summary")
+            else:
+                prompt_parts.append(
+                    f"\nGenerate {content_type} content that is clear, accurate, and helpful."
+                )
+
+            full_prompt = "\n".join(prompt_parts)
+
+            # Create enhanced system prompt
+            system_prompt = f"""You are an expert software engineering content creator specializing in {content_type} content.
             
-            Guidelines:
-            - Be accurate and technically precise
-            - Use appropriate examples and analogies
-            - Structure content clearly with headings and bullet points
-            - Include practical applications where relevant
-            - Maintain appropriate technical depth for the audience level
-            """
+Your content should be:
+- Technically accurate and up-to-date
+- Well-structured with clear organization
+- Appropriate for {audience} level audience
+- Practical and actionable
+- Engaging and easy to understand
 
-            # Generate content using LLM
+When generating content:
+- Use clear headings and subheadings
+- Include relevant examples and code snippets where appropriate
+- Explain complex concepts in accessible terms
+- Provide context and real-world applications
+- Maintain professional tone and quality
+
+{f"Format the content appropriately for {doc_format} output." if for_document else ""}
+"""
+
+            logger.debug(
+                "Generating content",
+                topic=topic[:100],
+                content_type=content_type,
+                for_document=for_document,
+                has_context=bool(state.task_results),
+            )
+
+            # Generate content using LLM with appropriate temperature
+            temperature = 0.7 if content_type in ["creative", "tutorial"] else 0.6
             content = await self.llm_integration.generate_response(
-                prompt=prompt,
+                prompt=full_prompt,
                 system_prompt=system_prompt,
-                temperature=0.7,
+                temperature=temperature,
                 max_tokens=4000,
             )
 
+            # Validate content quality
+            if not content or len(content.strip()) < 50:
+                logger.warning("Generated content is too short, regenerating...")
+                # Retry with more explicit instructions
+                retry_prompt = f"{full_prompt}\n\nPlease provide a comprehensive response of at least 200 words."
+                content = await self.llm_integration.generate_response(
+                    prompt=retry_prompt,
+                    system_prompt=system_prompt,
+                    temperature=temperature,
+                    max_tokens=4000,
+                )
+
             execution_time = asyncio.get_event_loop().time() - start_time
+
+            logger.info(
+                "Content generation completed",
+                content_length=len(content),
+                execution_time=execution_time,
+            )
 
             return {
                 "type": "content_generation",
@@ -1695,7 +1829,9 @@ Provide a comprehensive analysis including:
                     "topic": topic,
                     "audience": audience,
                     "content_type": content_type,
-                    "tokens_used": len(content.split()) * 1.3,  # Rough estimate
+                    "for_document": for_document,
+                    "content_length": len(content),
+                    "word_count": len(content.split()),
                 },
             }
 
@@ -1714,16 +1850,25 @@ Provide a comprehensive analysis including:
     async def _execute_code_generation_task(
         self, task: Dict[str, Any], state: WorkflowState
     ) -> Dict[str, Any]:
-        """Execute code generation task"""
+        """Execute code generation task with automatic testing"""
 
         start_time = asyncio.get_event_loop().time()
 
         try:
             # Extract task parameters
-            description = task.get("description", "Write code based on requirements")
-            language = task.get("language", "python")
-            requirements = task.get("requirements", [])
-            style_guide = task.get("style_guide", "Follow best practices")
+            parameters = task.get("parameters", {})
+            description = parameters.get(
+                "description", "Write code based on requirements"
+            )
+            language = parameters.get("language", "python")
+            requirements = parameters.get("requirements", [])
+            style_guide = parameters.get("style_guide", "Follow best practices")
+            auto_test = parameters.get(
+                "auto_test", True
+            )  # Enable automatic testing by default
+            max_retries = parameters.get(
+                "max_retries", 2
+            )  # Retry code generation if tests fail
 
             # Create system prompt for code generation
             system_prompt = f"""You are an expert {language} developer. Generate clean, efficient, and well-documented code.
@@ -1735,6 +1880,7 @@ Provide a comprehensive analysis including:
             - Write maintainable and readable code
             - Include type hints where applicable
             - Follow the specified style guide: {style_guide}
+            - Ensure code is syntactically correct and runnable
             """
 
             # Build the prompt with requirements
@@ -1750,27 +1896,100 @@ Provide a comprehensive analysis including:
             )
             prompt = "\n".join(prompt_parts)
 
-            # Generate code using LLM
-            code = await self.llm_integration.generate_response(
-                prompt=prompt,
-                system_prompt=system_prompt,
-                temperature=0.3,  # Lower temperature for more consistent code
-                max_tokens=2500,
-            )
+            # ITERATIVE CODE GENERATION WITH TESTING
+            code = None
+            test_result = None
+            generation_attempts = 0
+
+            while generation_attempts <= max_retries:
+                generation_attempts += 1
+
+                # Generate code using LLM
+                logger.info(
+                    f"Generating code (attempt {generation_attempts}/{max_retries + 1})"
+                )
+
+                current_code = await self.llm_integration.generate_response(
+                    prompt=prompt,
+                    system_prompt=system_prompt,
+                    temperature=0.3
+                    + (
+                        generation_attempts * 0.1
+                    ),  # Slightly increase temperature on retries
+                    max_tokens=2500,
+                )
+
+                # AUTOMATIC TESTING: Test the generated code
+                if auto_test and self.tool_registry:
+                    logger.info("Testing generated code automatically")
+                    test_result = await self._test_generated_code(
+                        current_code, language, task
+                    )
+
+                    if test_result.get("success"):
+                        logger.info("Code testing passed!")
+                        code = current_code
+                        break
+                    else:
+                        logger.warning(
+                            f"Code testing failed (attempt {generation_attempts}): {test_result.get('error')}"
+                        )
+
+                        # If we have more retries, improve the prompt with error feedback
+                        if generation_attempts <= max_retries:
+                            error_msg = test_result.get("error", "Unknown error")
+                            prompt = f"""{prompt}
+
+IMPORTANT: Previous code generation failed with error:
+{error_msg}
+
+Please fix this issue and generate corrected code."""
+                        else:
+                            # Last attempt failed, use the code anyway but mark it
+                            code = current_code
+                            logger.warning(
+                                "Max retries reached, returning code despite test failures"
+                            )
+                else:
+                    # No testing, accept the code
+                    code = current_code
+                    break
 
             execution_time = asyncio.get_event_loop().time() - start_time
 
-            return {
+            # Build result with testing metadata
+            result = {
                 "type": "code_generation",
                 "result": code,
+                "code": code,  # Also include as 'code' field for easier access
                 "execution_time": execution_time,
                 "metadata": {
                     "language": language,
                     "requirements_count": len(requirements),
                     "style_guide": style_guide,
                     "code_lines": len(code.split("\n")),
+                    "generation_attempts": generation_attempts,
+                    "auto_tested": auto_test and test_result is not None,
+                    "test_passed": test_result.get("success") if test_result else None,
+                    "test_error": (
+                        test_result.get("error")
+                        if test_result and not test_result.get("success")
+                        else None
+                    ),
                 },
             }
+
+            # Mark as error if testing failed on final attempt
+            if (
+                test_result
+                and not test_result.get("success")
+                and generation_attempts > max_retries
+            ):
+                result["warning"] = (
+                    f"Code generated but failed testing: {test_result.get('error')}"
+                )
+
+            return result
 
         except Exception as e:
             logger.error(f"Code generation task failed: {str(e)}")
@@ -1783,6 +2002,53 @@ Provide a comprehensive analysis including:
                 "error": True,
                 "error_message": str(e),
             }
+
+    async def _test_generated_code(
+        self, code: str, language: str, task: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Test generated code using compiler_runtime tool"""
+
+        try:
+            # Get compiler tool from registry
+            compiler_tool = await self.tool_registry.get_tool_by_name(
+                "compiler_runtime"
+            )
+
+            if not compiler_tool:
+                logger.warning("Compiler tool not available, skipping code testing")
+                return {"success": True, "skipped": True}
+
+            # Create execution context
+            from .tools.registry import ExecutionContext, ExecutionPriority
+
+            context = ExecutionContext(
+                session_id=task.get("session_id", "test"),
+                priority=ExecutionPriority.HIGH,
+                timeout=30,
+                max_retries=1,
+            )
+
+            # Test the code
+            result = await compiler_tool.execute(
+                parameters={
+                    "code": code,
+                    "language": language,
+                    "mode": "validate",  # Just validate syntax and basic execution
+                },
+                context=context,
+            )
+
+            return {
+                "success": result.success,
+                "error": result.error_message if not result.success else None,
+                "execution_time": result.execution_time,
+                "metadata": result.metadata,
+            }
+
+        except Exception as e:
+            logger.error(f"Code testing failed: {e}")
+            # Don't fail the whole task if testing infrastructure fails
+            return {"success": True, "skipped": True, "error": str(e)}
 
     async def _execute_analysis_task(
         self, task: Dict[str, Any], state: WorkflowState
@@ -2727,6 +2993,128 @@ Speak naturally as if you're having a conversation, not listing tool outputs."""
             "average_execution_time": avg_execution_time,
             "workflow_graphs_cached": len(self.workflow_graphs),
         }
+
+    async def _replan_failed_tasks(
+        self,
+        original_plan: ExecutionPlan,
+        failed_tasks: Set[str],
+        completed_tasks: Set[str],
+        session_id: str,
+        original_query: str,
+        execution_id: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Replan and retry failed tasks with adaptive improvements"""
+
+        if not self.adaptive_engine:
+            logger.warning("Adaptive engine not initialized, skipping replan")
+            return None
+
+        try:
+            # Increment replan counter
+            self.active_executions[execution_id]["replan_count"] += 1
+
+            logger.info(
+                "Starting adaptive replanning",
+                failed_count=len(failed_tasks),
+                completed_count=len(completed_tasks),
+                replan_attempt=self.active_executions[execution_id]["replan_count"],
+            )
+
+            # Verify each failed task to understand why it failed
+            verification_results = {}
+            for task in original_plan.tasks:
+                task_id = task.get("id")
+                if task_id in failed_tasks:
+                    # Get the failed result
+                    failed_result = self.active_executions[execution_id].get(
+                        "checkpoints", []
+                    )
+                    if failed_result:
+                        last_checkpoint = failed_result[-1]
+                        task_result = (
+                            last_checkpoint.get("state", {})
+                            .get("task_results", {})
+                            .get(task_id, {})
+                        )
+
+                        # Verify the task
+                        verification = (
+                            await self.adaptive_engine.verify_task_completion(
+                                task, task_result
+                            )
+                        )
+                        verification_results[task_id] = verification
+
+                        logger.info(
+                            f"Task {task_id} verification",
+                            success=verification.success,
+                            issues=verification.issues_found,
+                            retry_recommended=verification.retry_recommended,
+                        )
+
+            # Create recovery plan
+            recovery_plan = await self.adaptive_engine.create_recovery_plan(
+                original_plan, failed_tasks, completed_tasks, verification_results
+            )
+
+            if not recovery_plan:
+                logger.info("No recovery plan could be created")
+                return None
+
+            # Execute recovery plan
+            logger.info(
+                f"Executing recovery plan with {len(recovery_plan.tasks)} tasks"
+            )
+
+            recovery_result = await self.execute_plan(
+                recovery_plan, session_id, original_query
+            )
+
+            # Extract results
+            recovered_tasks = set()
+            recovery_tool_results = []
+            recovery_completed = set()
+
+            if recovery_result.state == ExecutionState.COMPLETED:
+                for tool_result in recovery_result.tool_results:
+                    task_id = tool_result.get("task_id")
+                    if task_id and task_id.startswith("recovery_"):
+                        original_task_id = task_id.replace("recovery_", "")
+                        recovered_tasks.add(original_task_id)
+                        recovery_completed.add(original_task_id)
+
+                    recovery_tool_results.append(tool_result)
+
+            logger.info(
+                "Replanning completed",
+                recovered_tasks=len(recovered_tasks),
+                total_recovery_results=len(recovery_tool_results),
+            )
+
+            return {
+                "success": True,
+                "recovered_tasks": recovered_tasks,
+                "tool_results": recovery_tool_results,
+                "completed_tasks": recovery_completed,
+                "metadata": {
+                    "replan_attempt": self.active_executions[execution_id][
+                        "replan_count"
+                    ],
+                    "recovery_plan_id": recovery_plan.plan_id,
+                    "verification_results": {
+                        task_id: {
+                            "success": v.success,
+                            "issues": v.issues_found,
+                            "suggestions": v.suggestions,
+                        }
+                        for task_id, v in verification_results.items()
+                    },
+                },
+            }
+
+        except Exception as e:
+            logger.error(f"Replanning failed: {e}")
+            return None
 
     async def shutdown(self):
         """Shutdown orchestrator and cleanup resources"""

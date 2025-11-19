@@ -19,10 +19,16 @@ import uuid
 
 from .auth import get_current_active_user, User
 from src.shared.logging import get_logger
-from src.shared.services import get_agent_client
+import src.shared.services as services
+from src.shared.session_manager import get_session_manager
 
 logger = get_logger(__name__)
 router = APIRouter()
+
+
+async def get_agent_client():
+    """Wrapper around shared get_agent_client for easier testing and patching."""
+    return await services.get_agent_client()
 
 
 class ChatMessage(BaseModel):
@@ -270,6 +276,53 @@ async def send_message(
             },
         )
 
+        # Persist messages to session history
+        session_manager = get_session_manager()
+
+        # Ensure session exists and is owned by the current user
+        session_info = await session_manager.get_session(session_id)
+        if not session_info:
+            session_info = await session_manager.create_session(
+                user_id=current_user.id,
+                session_type="conversation",
+                title=message.message[:80],
+                context={},
+                session_id=session_id,
+            )
+
+        if session_info.user_id != current_user.id:
+            logger.warning(
+                "Session user mismatch when storing chat message",
+                session_id=session_id,
+                session_user_id=session_info.user_id,
+                current_user_id=current_user.id,
+            )
+        else:
+            history = session_info.context.get("messages", [])
+
+            user_entry = {
+                "id": message_id,
+                "role": "user",
+                "content": message.message,
+                "timestamp": start_time.isoformat(),
+                "source": "rest",
+            }
+
+            agent_entry = {
+                "id": f"agent_{message_id}",
+                "role": "assistant",
+                "content": response_text,
+                "timestamp": datetime.utcnow().isoformat(),
+                "source": "rest",
+                "metadata": agent_metadata,
+            }
+
+            history.extend([user_entry, agent_entry])
+
+            await session_manager.update_session_context(
+                session_id, {"messages": history}
+            )
+
         # Send response to WebSocket if session is connected
         if session_id in manager.active_connections:
             await manager.send_json_message(
@@ -443,6 +496,41 @@ async def handle_chat_message(
             response_text = "I'm experiencing some technical difficulties. Please try again in a moment."
             response_metadata = {"error": True, "error_message": str(e)}
 
+        # Persist messages to session history
+        session_manager = get_session_manager()
+        session_info = await session_manager.get_session(session_id)
+        if not session_info:
+            session_info = await session_manager.create_session(
+                user_id=user_id,
+                session_type="websocket_conversation",
+                title=message_content[:80],
+                context={},
+                session_id=session_id,
+            )
+
+        history = session_info.context.get("messages", [])
+
+        user_entry = {
+            "id": message_id,
+            "role": "user",
+            "content": message_content,
+            "timestamp": datetime.utcnow().isoformat(),
+            "source": "websocket",
+        }
+
+        agent_entry = {
+            "id": f"agent_{message_id}",
+            "role": "assistant",
+            "content": response_text,
+            "timestamp": datetime.utcnow().isoformat(),
+            "source": "websocket",
+            "metadata": response_metadata,
+        }
+
+        history.extend([user_entry, agent_entry])
+
+        await session_manager.update_session_context(session_id, {"messages": history})
+
         # Send response
         response_message = {
             "type": "message",
@@ -499,13 +587,14 @@ async def list_user_sessions(current_user: User = Depends(get_current_active_use
 
     sessions = []
     for session_info in session_infos:
+        message_history = session_info.context.get("messages", [])
         sessions.append(
             ChatSession(
                 session_id=session_info.session_id,
                 user_id=session_info.user_id,
                 created_at=session_info.created_at,
                 last_activity=session_info.last_activity,
-                message_count=0,  # TODO: Get actual message count
+                message_count=len(message_history),
                 status="active" if session_info.is_active else "inactive",
             )
         )
@@ -530,12 +619,14 @@ async def get_session_info(
     if session_info.user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Session access denied")
 
+    message_history = session_info.context.get("messages", [])
+
     return {
         "session_id": session_info.session_id,
         "user_id": session_info.user_id,
         "created_at": session_info.created_at,
         "last_activity": session_info.last_activity,
-        "message_count": 0,  # TODO: Get actual message count
+        "message_count": len(message_history),
         "status": "active" if session_info.is_active else "inactive",
         "is_connected": session_id in manager.active_connections,
         "session_type": session_info.session_type,
@@ -552,13 +643,28 @@ async def get_chat_history(
 ):
     """Get chat history for a session"""
 
-    # TODO: Verify user owns this session
-    # TODO: Get actual history from database
+    session_manager = get_session_manager()
+    session_info = await session_manager.get_session(session_id)
+
+    if not session_info:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if session_info.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Session access denied")
+
+    messages = session_info.context.get("messages", [])
+    total = len(messages)
+
+    # Apply offset/limit safely
+    if offset < 0:
+        offset = 0
+    end = offset + limit
+    messages_slice = messages[offset:end]
 
     return {
         "session_id": session_id,
-        "messages": [],
-        "total": 0,
+        "messages": messages_slice,
+        "total": total,
         "limit": limit,
         "offset": offset,
     }
@@ -570,12 +676,21 @@ async def delete_session(
 ):
     """Delete a chat session"""
 
-    # TODO: Verify user owns this session
-    # TODO: Delete session from database
+    session_manager = get_session_manager()
+    session_info = await session_manager.get_session(session_id)
+
+    if not session_info:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if session_info.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Session access denied")
 
     # Disconnect WebSocket if active
     if session_id in manager.active_connections:
         manager.disconnect(session_id)
+
+    # Mark session as ended
+    await session_manager.end_session(session_id)
 
     logger.info("Chat session deleted", session_id=session_id, user_id=current_user.id)
 
@@ -586,15 +701,32 @@ async def delete_session(
 async def get_chat_statistics(current_user: User = Depends(get_current_active_user)):
     """Get chat statistics for current user"""
 
-    # TODO: Get actual statistics from database
+    session_manager = get_session_manager()
+    sessions = await session_manager.get_user_sessions(
+        user_id=current_user.id, active_only=False
+    )
+
+    total_sessions = len(sessions)
+    total_messages = sum(len(s.context.get("messages", [])) for s in sessions)
+    active_sessions = len([s for s in sessions if s.is_active])
+
+    avg_session_length = total_messages / total_sessions if total_sessions > 0 else 0.0
+
+    # Determine most active day based on last_activity
+    from collections import Counter
+
+    if sessions:
+        day_counts = Counter(s.last_activity.strftime("%A") for s in sessions)
+        most_active_day = day_counts.most_common(1)[0][0]
+    else:
+        most_active_day = None
+
     return {
-        "total_sessions": 1,
-        "total_messages": 5,
-        "active_sessions": len(
-            [s for s in manager.user_sessions.get(current_user.id, [])]
-        ),
-        "avg_session_length": 10.5,
-        "most_active_day": "Monday",
+        "total_sessions": total_sessions,
+        "total_messages": total_messages,
+        "active_sessions": active_sessions,
+        "avg_session_length": avg_session_length,
+        "most_active_day": most_active_day,
     }
 
 

@@ -11,12 +11,14 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, BackgroundTasks
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from enum import Enum
 
 from .auth import get_current_active_user, User
 from src.shared.logging import get_logger
 from src.shared.config import get_settings
+import src.shared.services as services
 
 logger = get_logger(__name__)
 router = APIRouter()
@@ -76,15 +78,94 @@ class DocumentInfo(BaseModel):
 
 
 @router.post("/generate", response_model=DocumentResponse)
-async def generate_document(request: DocumentGenerationRequest):
+async def generate_document(
+    request: DocumentGenerationRequest,
+    current_user: User = Depends(get_current_active_user),
+):
     """Generate a document in the specified format"""
     # TODO: Integrate with document generation tool
-    return DocumentResponse(
-        document_id="doc_123",
-        download_url="/api/v1/documents/download/doc_123",
-        format=request.format,
-        status="pending",
-    )
+
+    settings = get_settings()
+
+    try:
+        # Call document_generation tool via Agent service
+        agent_client = await services.get_agent_client()
+
+        params: Dict[str, Any] = {
+            "content": request.content,
+            "format": request.format.value,
+            "template": request.template or "default",
+            "validate": True,
+        }
+
+        if request.title:
+            params["filename"] = request.title
+
+        session_id = f"docgen_{current_user.id}_{int(datetime.utcnow().timestamp())}"
+
+        agent_response = await agent_client.execute_tool(
+            "document_generation",
+            params,
+            session_id,
+        )
+
+        if agent_response.get("status") != "success":
+            logger.error(
+                "Document generation tool returned non-success status",
+                status=agent_response.get("status"),
+                metadata=agent_response.get("metadata"),
+            )
+            raise HTTPException(status_code=500, detail="Document generation failed")
+
+        result = agent_response.get("result") or {}
+        filename = result.get("filename")
+        file_path = result.get("file_path")
+        format_str = result.get("format", request.format.value)
+
+        if not file_path or not os.path.exists(file_path):
+            logger.error(
+                "Generated document file not found",
+                file_path=file_path,
+            )
+            raise HTTPException(
+                status_code=500, detail="Generated document file not found"
+            )
+
+        # Compute file size and content hash
+        import hashlib
+
+        with open(file_path, "rb") as f:
+            file_bytes = f.read()
+
+        file_size = len(file_bytes)
+        content_hash = hashlib.sha256(file_bytes).hexdigest()
+
+        from src.shared.database import DocumentOperations
+
+        document = DocumentOperations.create_document(
+            user_id=current_user.id,
+            original_filename=filename or f"generated_document.{format_str}",
+            file_path=file_path,
+            content_hash=content_hash,
+            file_size=file_size,
+            document_type=format_str,
+            processing_status="completed",
+        )
+
+        download_url = f"/api/v1/documents/download/{document.id}"
+
+        return DocumentResponse(
+            document_id=document.id,
+            download_url=download_url,
+            format=request.format,
+            status="completed",
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Document generation failed", error=str(e))
+        raise HTTPException(status_code=500, detail="Document generation failed")
 
 
 @router.post("/upload", response_model=DocumentUploadResponse)
@@ -500,7 +581,48 @@ async def search_documents(
 
 
 @router.get("/download/{document_id}")
-async def download_document(document_id: str):
+async def download_document(
+    document_id: str, current_user: User = Depends(get_current_active_user)
+):
     """Download a generated document"""
     # TODO: Implement document download for generated documents
-    raise HTTPException(status_code=404, detail="Document not found")
+
+    from src.shared.database import DocumentOperations
+
+    document = DocumentOperations.get_document_by_id(document_id)
+
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    if document.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Document access denied")
+
+    file_path = Path(document.file_path)
+
+    if not file_path.exists():
+        logger.error(
+            "Document file not found on disk",
+            document_id=document_id,
+            file_path=str(file_path),
+        )
+        raise HTTPException(status_code=404, detail="Document file not found")
+
+    filename = document.original_filename
+
+    ext = file_path.suffix.lower()
+    media_type_map = {
+        ".pdf": "application/pdf",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".ppt": "application/vnd.ms-powerpoint",
+        ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        ".txt": "text/plain",
+        ".md": "text/markdown",
+        ".html": "text/html",
+    }
+    media_type = media_type_map.get(ext, "application/octet-stream")
+
+    return FileResponse(
+        path=str(file_path),
+        media_type=media_type,
+        filename=filename,
+    )
