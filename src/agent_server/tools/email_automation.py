@@ -730,9 +730,23 @@ class EmailAutomationTool(BaseTool):
 
         try:
             # Extract parameters
+            print(parameters)
             recipients = parameters["recipients"]
             subject = parameters.get("subject", "")
+            # FIX: Retrieve body content, defaulting to the 'body' parameter first.
             body = parameters.get("body", "")
+            # Fallback: If 'body' is empty, check for a generic 'content' field, 
+            # often used by the orchestrator to pass generated text.
+            if not body and "content" in parameters:
+                body = parameters["content"]
+
+            if not body and subject and recipients and len(subject) > 10:
+                # Regex to extract the subject and body from the concatenated string
+                match = re.search(r'(?:as|with subject)\s+([\w\s]+?)\s+and body\s+as\s+(.*)', subject, re.IGNORECASE)
+                if match:
+                    subject = match.group(1).strip()
+                    body = match.group(2).strip()
+                    logger.info("Successfully re-parsed concatenated subject/body parameters.")
             template_name = parameters.get("template")
             template_variables = parameters.get("template_variables", {})
             attachments = parameters.get("attachments", [])
