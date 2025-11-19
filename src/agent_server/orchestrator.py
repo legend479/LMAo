@@ -1343,23 +1343,35 @@ class LangGraphOrchestrator:
     async def _execute_tool_task(
         self, task: Dict[str, Any], state: WorkflowState
     ) -> Dict[str, Any]:
-        """Execute a tool-based task"""
+        """Execute a tool-based task with enhanced logging and error handling"""
 
         start_time = asyncio.get_event_loop().time()
         tool_name = task.get("tool", "unknown")
         parameters = task.get("parameters", {})
+        task_id = task.get("id", "unknown")
+
+        logger.info(
+            f"Executing tool task",
+            task_id=task_id,
+            tool_name=tool_name,
+            parameter_count=len(parameters),
+            session_id=state.session_id,
+        )
 
         try:
             # Handle RAG retrieval task
             if tool_name == "rag_search" or tool_name == "knowledge_retrieval":
+                logger.info(f"Using RAG search handler for {tool_name}")
                 return await self._execute_rag_search(task, state)
 
             # Handle document analysis task
             elif tool_name == "document_analysis":
+                logger.info(f"Using document analysis handler")
                 return await self._execute_document_analysis(task, state)
 
             # Handle code analysis task
             elif tool_name == "code_analysis":
+                logger.info(f"Using code analysis handler")
                 return await self._execute_code_analysis(task, state)
 
             # Generic tool execution via tool registry
@@ -1368,6 +1380,15 @@ class LangGraphOrchestrator:
                     # Try to execute via tool registry if available
                     if hasattr(self, "tool_registry") and self.tool_registry:
                         from .tools.registry import ExecutionContext, ExecutionPriority
+
+                        logger.info(f"Executing {tool_name} via tool registry")
+
+                        # Log available tools for debugging
+                        if hasattr(self.tool_registry, "active_tools"):
+                            active_tool_count = len(self.tool_registry.active_tools)
+                            logger.debug(
+                                f"Tool registry has {active_tool_count} active tools"
+                            )
 
                         # Create execution context
                         context = ExecutionContext(
@@ -1378,16 +1399,36 @@ class LangGraphOrchestrator:
                         )
 
                         # Get and execute tool (use get_tool_by_name for name-based lookup)
+                        logger.debug(f"Looking up tool: {tool_name}")
                         tool = await self.tool_registry.get_tool_by_name(tool_name)
 
                         if tool is None:
+                            # Log available tools for debugging
+                            available_tools = await self.tool_registry.list_tools()
+                            tool_names = [
+                                t.get("name") for t in available_tools.get("tools", [])
+                            ]
+                            logger.error(
+                                f"Tool '{tool_name}' not found in registry. "
+                                f"Available tools: {tool_names}"
+                            )
                             raise ValueError(
-                                f"Tool '{tool_name}' not found in registry"
+                                f"Tool '{tool_name}' not found in registry. "
+                                f"Available: {', '.join(tool_names)}"
                             )
 
+                        logger.info(
+                            f"Executing tool {tool_name} with parameters: {list(parameters.keys())}"
+                        )
                         result = await tool.execute(parameters, context)
 
                         execution_time = asyncio.get_event_loop().time() - start_time
+
+                        logger.info(
+                            f"Tool {tool_name} executed successfully",
+                            execution_time=execution_time,
+                            success=result.success,
+                        )
 
                         return {
                             "tool": tool_name,
@@ -1403,14 +1444,17 @@ class LangGraphOrchestrator:
                     else:
                         # Fallback: basic execution without registry
                         execution_time = asyncio.get_event_loop().time() - start_time
-                        logger.warning(
-                            f"Tool registry not available, using basic execution for {tool_name}"
+                        logger.error(
+                            f"Tool registry not available for {tool_name}. "
+                            f"Registry exists: {hasattr(self, 'tool_registry')}, "
+                            f"Registry value: {self.tool_registry if hasattr(self, 'tool_registry') else 'N/A'}"
                         )
                         return {
                             "tool": tool_name,
                             "parameters": parameters,
                             "result": f"Tool {tool_name} executed (basic mode - tool registry not initialized)",
                             "execution_time": execution_time,
+                            "error": True,
                             "metadata": {
                                 "tool_type": "basic",
                                 "parameter_count": len(parameters),
@@ -1418,17 +1462,27 @@ class LangGraphOrchestrator:
                             },
                         }
                 except Exception as tool_error:
-                    # If tool registry fails, log and return error
-                    logger.warning(
-                        f"Tool registry execution failed for {tool_name}, using fallback",
+                    # If tool registry fails, log detailed error
+                    import traceback
+
+                    error_trace = traceback.format_exc()
+
+                    logger.error(
+                        f"Tool registry execution failed for {tool_name}",
                         error=str(tool_error),
+                        error_type=type(tool_error).__name__,
+                        traceback=error_trace,
                     )
+
                     execution_time = asyncio.get_event_loop().time() - start_time
                     return {
                         "tool": tool_name,
                         "parameters": parameters,
-                        "result": f"Tool {tool_name} execution attempted (registry unavailable: {str(tool_error)})",
+                        "result": f"Tool {tool_name} execution failed: {str(tool_error)}",
                         "execution_time": execution_time,
+                        "error": True,
+                        "error_message": str(tool_error),
+                        "error_type": type(tool_error).__name__,
                         "metadata": {
                             "tool_type": "fallback",
                             "parameter_count": len(parameters),
@@ -1437,7 +1491,17 @@ class LangGraphOrchestrator:
                     }
 
         except Exception as e:
-            logger.error(f"Tool execution failed: {tool_name}, error: {str(e)}")
+            import traceback
+
+            error_trace = traceback.format_exc()
+
+            logger.error(
+                f"Tool execution failed: {tool_name}",
+                error=str(e),
+                error_type=type(e).__name__,
+                traceback=error_trace,
+            )
+
             execution_time = asyncio.get_event_loop().time() - start_time
 
             return {
@@ -1447,6 +1511,7 @@ class LangGraphOrchestrator:
                 "execution_time": execution_time,
                 "error": True,
                 "error_message": str(e),
+                "error_type": type(e).__name__,
             }
 
     async def _execute_rag_search(
@@ -2286,7 +2351,7 @@ Provide accurate and useful responses that build on the ongoing discussion.
     ) -> str:
         """Generate coherent final response with LLM synthesis"""
 
-        logger.debug(
+        logger.info(
             "Generating final response",
             tool_results_count=len(tool_results),
             original_query=original_query[:100] if original_query else None,
@@ -2296,38 +2361,92 @@ Provide accurate and useful responses that build on the ongoing discussion.
         if not original_query and isinstance(final_state, dict):
             original_query = final_state.get("original_query")
 
-        # Filter out error-only results
-        successful_results = [
-            r for r in tool_results if not r.get("result", {}).get("error", False)
-        ]
+        # Enhanced result filtering - be less aggressive about filtering
+        successful_results = []
+        partial_results = []
 
-        # If we have successful results and original query, synthesize
-        if successful_results and original_query and self.llm_integration:
+        for r in tool_results:
+            result_data = r.get("result", {})
+
+            # Check if result has actual content (not just error flag)
+            has_content = False
+            if isinstance(result_data, dict):
+                # Check for various content fields
+                content_fields = [
+                    "result",
+                    "response",
+                    "content",
+                    "answer",
+                    "data",
+                    "output",
+                    "retrieved_documents",
+                ]
+                has_content = any(
+                    field in result_data and result_data[field]
+                    for field in content_fields
+                )
+
+                # Even if error flag is set, include if there's useful content
+                if has_content:
+                    if result_data.get("error"):
+                        partial_results.append(r)
+                        logger.debug(
+                            f"Including partial result from {r.get('task_id')}"
+                        )
+                    else:
+                        successful_results.append(r)
+            elif isinstance(result_data, str) and len(result_data) > 10:
+                # String results are usually good
+                successful_results.append(r)
+
+        # Combine successful and partial results for synthesis
+        usable_results = successful_results + partial_results
+
+        logger.info(
+            f"Result filtering: {len(successful_results)} successful, "
+            f"{len(partial_results)} partial, {len(usable_results)} total usable"
+        )
+
+        # If we have usable results and original query, synthesize
+        if usable_results and original_query and self.llm_integration:
             try:
+                logger.info("Attempting LLM synthesis of tool results")
                 synthesized = await self._synthesize_coherent_response(
-                    original_query, successful_results, final_state
+                    original_query, usable_results, final_state
                 )
 
                 # Validate synthesis quality
                 if synthesized and len(synthesized.strip()) >= 20:
+                    logger.info(f"LLM synthesis successful: {len(synthesized)} chars")
                     return synthesized
                 else:
                     logger.warning("LLM synthesis returned insufficient content")
             except Exception as e:
-                logger.error(f"Response synthesis failed: {e}, falling back")
+                logger.error(
+                    f"Response synthesis failed: {e}, falling back to extraction"
+                )
+                import traceback
 
-        # Fallback: Extract from successful tool results
-        if successful_results:
-            extracted = self._extract_best_response(successful_results)
+                logger.debug(traceback.format_exc())
+
+        # Fallback: Extract from usable tool results
+        if usable_results:
+            logger.info("Attempting direct extraction from tool results")
+            extracted = self._extract_best_response(usable_results)
             if extracted:
+                logger.info(f"Direct extraction successful: {len(extracted)} chars")
                 return extracted
+            else:
+                logger.warning("Direct extraction failed to find usable content")
 
         # All tasks failed - provide helpful error message
-        if tool_results and not successful_results:
+        if tool_results and not usable_results:
             failed_count = len(tool_results)
             error_types = set(
                 r.get("result", {}).get("error_type", "Unknown") for r in tool_results
             )
+
+            logger.warning(f"All {failed_count} tool executions failed")
 
             if original_query:
                 return (
@@ -2342,6 +2461,7 @@ Provide accurate and useful responses that build on the ongoing discussion.
                 )
 
         # No results at all
+        logger.warning("No tool results available for response generation")
         if original_query:
             return f"I processed your question: '{original_query[:100]}...', but I don't have enough information to provide a complete answer. Could you provide more details?"
         else:
@@ -2419,23 +2539,49 @@ Provide accurate and useful responses that build on the ongoing discussion.
     ) -> str:
         """Synthesize a coherent response using LLM that directly answers the original query"""
 
-        # Gather all relevant information from tool results
+        # Gather all relevant information from tool results with enhanced extraction
         gathered_info = []
         for i, tool_result in enumerate(tool_results):
             task_id = tool_result.get("task_id", f"task_{i}")
             result_data = tool_result.get("result", {})
+            tool_name = tool_result.get("tool", "unknown")
 
-            # Extract meaningful content
+            # Extract meaningful content with multiple fallback strategies
             content = None
             if isinstance(result_data, dict):
+                # Try standard fields first
                 content = (
                     result_data.get("result")
                     or result_data.get("response")
                     or result_data.get("content")
+                    or result_data.get("answer")
+                    or result_data.get("output")
                 )
-                # Also check for data field
+
+                # Check for data field
                 if not content and "data" in result_data:
-                    content = str(result_data["data"])
+                    data = result_data["data"]
+                    if isinstance(data, str):
+                        content = data
+                    elif isinstance(data, dict):
+                        # Try to extract from nested data
+                        content = (
+                            data.get("result")
+                            or data.get("response")
+                            or data.get("content")
+                            or str(data)
+                        )
+                    else:
+                        content = str(data)
+
+                # Check for retrieved_documents (RAG results)
+                if not content and "retrieved_documents" in result_data:
+                    docs = result_data["retrieved_documents"]
+                    if docs and isinstance(docs, list):
+                        content = "\n\n".join(
+                            [doc.get("content", "") for doc in docs[:3]]
+                        )
+
             elif isinstance(result_data, str):
                 content = result_data
 
@@ -2444,47 +2590,66 @@ Provide accurate and useful responses that build on the ongoing discussion.
 
             # Fallback: If result is a dict but we couldn't extract specific fields, use the whole dict
             if content is None and result_data:
-                content = str(result_data)
+                # Don't include error-only results
+                if not (
+                    isinstance(result_data, dict)
+                    and result_data.get("error")
+                    and len(result_data) == 1
+                ):
+                    content = str(result_data)
 
-            if content and not content.startswith("Tool") and len(content) > 10:
-                gathered_info.append(
-                    {"task": task_id, "content": content[:2000]}  # Limit length
-                )
+            # Validate content quality
+            if content and len(content) > 10:
+                # Skip generic tool execution messages
+                skip_patterns = ["Tool", "executed", "basic mode", "not initialized"]
+                if not any(pattern in content for pattern in skip_patterns):
+                    gathered_info.append(
+                        {
+                            "task": task_id,
+                            "tool": tool_name,
+                            "content": content[:2000],  # Limit length
+                        }
+                    )
+                    logger.debug(
+                        f"Extracted content from {task_id} ({tool_name}): {len(content)} chars"
+                    )
 
         # If no meaningful content gathered, return fallback
         if not gathered_info:
+            logger.warning("No meaningful content extracted from tool results")
             return "I've processed your request, but I don't have enough information to provide a detailed answer. Could you please rephrase your question?"
 
-        # Build context for synthesis
+        # Build context for synthesis with tool information
         context_parts = []
-        for info in gathered_info:
-            context_parts.append(f"From {info['task']}:\n{info['content']}\n")
+        for i, info in enumerate(gathered_info, 1):
+            context_parts.append(f"Source {i} ({info['tool']}):\n{info['content']}\n")
 
         context_text = "\n".join(context_parts)
 
-        # Create synthesis prompt
-        system_prompt = """You are a helpful AI assistant engaged in a natural conversation. 
-Your task is to synthesize information from various sources into a coherent, conversational response that directly answers the user's question.
+        # Create enhanced synthesis prompt with stronger directives
+        system_prompt = """You are a knowledgeable AI assistant. Your task is to answer the user's question using ONLY the information provided in the sources below.
 
-Guidelines:
-- Directly address the user's original question
-- Synthesize information from all provided sources into a unified answer
-- Maintain a conversational, helpful tone
-- Don't mention "tools" or "tasks" - speak naturally
-- If information is incomplete, acknowledge it naturally
-- Build on the conversation context
-- Provide actionable insights when possible
+CRITICAL RULES:
+1. Base your answer EXCLUSIVELY on the provided sources
+2. Directly answer the user's question - don't summarize sources
+3. Synthesize information from multiple sources into one coherent answer
+4. Speak naturally and conversationally
+5. Do NOT mention "sources", "tools", or "tasks" in your response
+6. If the sources don't contain enough information, say so clearly
+7. Do NOT make up or infer information not present in the sources
+8. Provide specific details, examples, and explanations from the sources
 """
 
-        synthesis_prompt = f"""Original User Question: {original_query}
+        synthesis_prompt = f"""USER'S QUESTION: {original_query}
 
-Information Gathered:
+AVAILABLE INFORMATION:
 {context_text}
 
-Please provide a comprehensive, conversational response that directly answers the user's question by synthesizing the information above. 
-Speak naturally as if you're having a conversation, not listing tool outputs."""
+TASK: Answer the user's question using the information above. Provide a direct, comprehensive answer that synthesizes all relevant information. Speak naturally as if you're explaining to a colleague.
 
-        logger.debug(
+Your answer:"""
+
+        logger.info(
             "Synthesizing response with LLM",
             original_query=original_query[:100],
             context_length=len(context_text),
