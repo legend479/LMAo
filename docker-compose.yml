@@ -26,12 +26,9 @@ services:
       - PYTHONUNBUFFERED=1
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      elasticsearch:
-        condition: service_healthy
+      - postgres
+      - redis
+      - elasticsearch
     volumes:
       - ./uploads:/app/uploads
       - ./logs:/app/logs
@@ -70,6 +67,8 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - ELASTICSEARCH_HOST=elasticsearch
       - ELASTICSEARCH_PORT=9200
+      - RAG_HOST=${RAG_HOST:-rag-pipeline}
+      - RAG_PORT=${RAG_PORT:-8002}
       - METRICS_PORT=9092
       - PYTHONUNBUFFERED=1
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
@@ -79,12 +78,9 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - GOOGLE_API_KEY=${GOOGLE_API_KEY}
     depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      elasticsearch:
-        condition: service_healthy
+      - postgres
+      - redis
+      - elasticsearch
     volumes:
       - ./logs:/app/logs
     networks:
@@ -126,10 +122,8 @@ services:
       - GENERAL_EMBEDDING_MODEL=${GENERAL_EMBEDDING_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
       - DOMAIN_EMBEDDING_MODEL=${DOMAIN_EMBEDDING_MODEL:-microsoft/graphcodebert-base}
     depends_on:
-      elasticsearch:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+      - elasticsearch
+      - redis
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
@@ -166,8 +160,7 @@ services:
       - REACT_APP_API_URL=${REACT_APP_API_URL:-http://localhost:8000}
       - REACT_APP_WS_URL=${REACT_APP_WS_URL:-ws://localhost:8000}
     depends_on:
-      api-server:
-        condition: service_healthy
+      - api-server
     networks:
       - se-sme-network
     restart: unless-stopped

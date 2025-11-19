@@ -1,4 +1,3 @@
-import { io, Socket } from 'socket.io-client';
 import { store } from '../store/store';
 import { setConnected, addMessage, setTyping } from '../store/slices/chatSlice';
 import { updateMetrics, addToolExecution, updateToolExecution } from '../store/slices/systemSlice';
@@ -6,135 +5,148 @@ import { addNotification } from '../store/slices/uiSlice';
 import { WebSocketMessage, Message, SystemMetrics, ToolExecution } from '../types';
 
 class WebSocketService {
-  private socket: Socket | null = null;
+  private socket: WebSocket | null = null;
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
   private reconnectDelay = 1000;
+  private baseUrl = process.env.REACT_APP_WS_URL || 'ws://localhost:8000';
+  private sessionId: string | null = null;
 
-  connect(token: string): void {
-    if (this.socket?.connected) {
-      return;
+  connect(token: string, sessionId: string | 'new' = 'new'): void {
+    if (this.socket && this.socket.readyState === WebSocket.OPEN) return;
+
+    // Build websocket URL: e.g. ws://host/api/v1/chat/ws/{sessionId}?token=...
+    const sid = sessionId || 'new';
+    const url = `${this.baseUrl.replace(/\/+$/, '')}/api/v1/chat/ws/${encodeURIComponent(
+      sid
+    )}?token=${encodeURIComponent(token)}`;
+
+    try {
+      this.socket = new WebSocket(url);
+      this.sessionId = sid;
+
+      this.socket.onopen = () => {
+        console.log('WebSocket connected');
+        store.dispatch(setConnected(true));
+        store.dispatch(
+          addNotification({ type: 'success', message: 'Connected to SE SME Agent', autoHide: true })
+        );
+        this.reconnectAttempts = 0;
+      };
+
+      this.socket.onclose = (ev) => {
+        console.log('WebSocket disconnected', ev);
+        store.dispatch(setConnected(false));
+        this.handleReconnect(token, this.sessionId || 'new');
+      };
+
+      this.socket.onerror = (err) => {
+        console.error('WebSocket error', err);
+        store.dispatch(
+          addNotification({ type: 'error', message: 'WebSocket connection error', autoHide: true })
+        );
+      };
+
+      this.socket.onmessage = (ev) => {
+        try {
+          const parsed: WebSocketMessage = JSON.parse(ev.data);
+          this.handleIncoming(parsed);
+        } catch (e) {
+          console.warn('Received non-JSON WebSocket message', ev.data);
+        }
+      };
+
+    } catch (e) {
+      console.error('Failed to create WebSocket', e);
     }
-
-    this.socket = io(process.env.REACT_APP_WS_URL || 'ws://localhost:8000', {
-      auth: {
-        token,
-      },
-      transports: ['websocket'],
-    });
-
-    this.setupEventListeners();
   }
 
   disconnect(): void {
     if (this.socket) {
-      this.socket.disconnect();
+      this.socket.close();
       this.socket = null;
     }
     store.dispatch(setConnected(false));
   }
 
-  sendMessage(content: string, conversationId: string): void {
-    if (this.socket?.connected) {
-      this.socket.emit('message', {
-        content,
-        conversationId,
-        timestamp: new Date(),
-      });
+  sendMessage(content: string, conversationId?: string): void {
+    if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+      const payload = {
+        type: 'message',
+        data: {
+          message: content,
+          conversationId,
+          timestamp: new Date().toISOString(),
+        },
+      };
+      this.socket.send(JSON.stringify(payload));
     }
   }
 
-  joinConversation(conversationId: string): void {
-    if (this.socket?.connected) {
-      this.socket.emit('join_conversation', { conversationId });
+  // To join a conversation, reconnect to the server with the session id in the path
+  joinConversation(conversationId: string, token: string): void {
+    this.disconnect();
+    this.connect(token, conversationId);
+  }
+
+  leaveConversation(conversationId?: string): void {
+    // Close the connection; server will cleanup session
+    this.disconnect();
+  }
+
+  private handleIncoming(msg: WebSocketMessage): void {
+    const { type, data } = msg;
+
+    switch (type) {
+      case 'message':
+        store.dispatch(addMessage(data as Message));
+        break;
+      case 'typing':
+        store.dispatch(setTyping((data as any).is_typing || (data as any).isTyping || false));
+        break;
+      case 'system':
+        // handle system messages like welcome
+        if ((data as any).metrics) {
+          store.dispatch(updateMetrics((data as any).metrics as SystemMetrics));
+        }
+        break;
+      case 'system_metrics':
+        store.dispatch(updateMetrics(data as SystemMetrics));
+        break;
+      case 'tool_execution_start':
+        store.dispatch(addToolExecution(data as ToolExecution));
+        break;
+      case 'tool_execution_update':
+        store.dispatch(updateToolExecution(data as { id: string; updates: Partial<ToolExecution> }));
+        break;
+      case 'error':
+        store.dispatch(
+          addNotification({ type: 'error', message: (data as any).message || 'Server error', autoHide: false })
+        );
+        break;
+      default:
+        console.debug('Unhandled WebSocket message type', type, data);
     }
   }
 
-  leaveConversation(conversationId: string): void {
-    if (this.socket?.connected) {
-      this.socket.emit('leave_conversation', { conversationId });
-    }
-  }
-
-  private setupEventListeners(): void {
-    if (!this.socket) return;
-
-    this.socket.on('connect', () => {
-      console.log('WebSocket connected');
-      store.dispatch(setConnected(true));
-      store.dispatch(addNotification({
-        type: 'success',
-        message: 'Connected to SE SME Agent',
-        autoHide: true,
-      }));
-      this.reconnectAttempts = 0;
-    });
-
-    this.socket.on('disconnect', () => {
-      console.log('WebSocket disconnected');
-      store.dispatch(setConnected(false));
-      this.handleReconnect();
-    });
-
-    this.socket.on('message', (data: Message) => {
-      store.dispatch(addMessage(data));
-    });
-
-    this.socket.on('typing', (data: { isTyping: boolean; userId: string }) => {
-      store.dispatch(setTyping(data.isTyping));
-    });
-
-    this.socket.on('system_metrics', (data: SystemMetrics) => {
-      store.dispatch(updateMetrics(data));
-    });
-
-    this.socket.on('tool_execution_start', (data: ToolExecution) => {
-      store.dispatch(addToolExecution(data));
-    });
-
-    this.socket.on('tool_execution_update', (data: { id: string; updates: Partial<ToolExecution> }) => {
-      store.dispatch(updateToolExecution(data));
-    });
-
-    this.socket.on('error', (error: any) => {
-      console.error('WebSocket error:', error);
-      store.dispatch(addNotification({
-        type: 'error',
-        message: `Connection error: ${error.message || 'Unknown error'}`,
-        autoHide: true,
-      }));
-    });
-
-    this.socket.on('connect_error', (error: any) => {
-      console.error('WebSocket connection error:', error);
-      store.dispatch(addNotification({
-        type: 'error',
-        message: 'Failed to connect to SE SME Agent',
-        autoHide: true,
-      }));
-    });
-  }
-
-  private handleReconnect(): void {
+  private handleReconnect(token: string, sessionId: string | 'new') {
     if (this.reconnectAttempts < this.maxReconnectAttempts) {
       this.reconnectAttempts++;
       const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
-      
+
       setTimeout(() => {
         console.log(`Attempting to reconnect (${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
-        this.socket?.connect();
+        this.connect(token, sessionId);
       }, delay);
     } else {
-      store.dispatch(addNotification({
-        type: 'error',
-        message: 'Unable to reconnect to SE SME Agent. Please refresh the page.',
-        autoHide: false,
-      }));
+      store.dispatch(
+        addNotification({ type: 'error', message: 'Unable to reconnect to SE SME Agent. Please refresh the page.', autoHide: false })
+      );
     }
   }
 
   isConnected(): boolean {
-    return this.socket?.connected || false;
+    return this.socket != null && this.socket.readyState === WebSocket.OPEN;
   }
 }
 

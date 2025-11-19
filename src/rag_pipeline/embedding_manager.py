@@ -15,6 +15,10 @@ from sentence_transformers import SentenceTransformer
 import torch
 
 from ..shared.logging import get_logger
+import time
+import sys
+import threading
+import itertools
 
 os.environ["HF_HUB_DOWNLOAD_TIMEOUT"] = "300"
 logger = get_logger(__name__)
@@ -100,6 +104,40 @@ class EmbeddingManager:
             "cache_hit_rate": 0.0,
         }
 
+    class _LoadingIndicator:
+        """Simple console spinner to indicate long-running model downloads/loads"""
+
+        def __init__(self, message: str = "Loading model", interval: float = 0.12):
+            self.message = message
+            self.interval = interval
+            self._stop = threading.Event()
+            self._thread = None
+
+        def start(self):
+            if not sys.stdout.isatty():
+                # If not attached to a TTY, don't try to render spinner
+                return
+
+            def _spin():
+                for ch in itertools.cycle("|/-\\"):
+                    if self._stop.is_set():
+                        break
+                    sys.stdout.write(f"\r{self.message}... {ch}")
+                    sys.stdout.flush()
+                    time.sleep(self.interval)
+                # clear the line
+                sys.stdout.write("\r" + " " * (len(self.message) + 8) + "\r")
+                sys.stdout.flush()
+
+            self._thread = threading.Thread(target=_spin)
+            self._thread.daemon = True
+            self._thread.start()
+
+        def stop(self):
+            self._stop.set()
+            if self._thread and self._thread.is_alive():
+                self._thread.join()
+
     async def initialize(self):
         """Initialize embedding models"""
         if self._initialized:
@@ -108,11 +146,27 @@ class EmbeddingManager:
         logger.info("Initializing Embedding Manager")
 
         try:
-            # Load general-purpose model
+            # Load general-purpose model with a simple visual indicator and timing
             logger.info(f"Loading general model: {self.config.general_model_name}")
-            self.general_model = SentenceTransformer(
-                self.config.general_model_name, device=self.config.device
+            general_indicator = self._LoadingIndicator(
+                f"Loading general model ({self.config.general_model_name})"
             )
+            gen_start = time.time()
+            general_indicator.start()
+            try:
+                self.general_model = SentenceTransformer(
+                    self.config.general_model_name, device=self.config.device
+                )
+            finally:
+                general_indicator.stop()
+                gen_dur = time.time() - gen_start
+                logger.info(
+                    f"General model load completed in {gen_dur:.1f}s: {self.config.general_model_name}"
+                )
+                if gen_dur > 5:
+                    logger.info(
+                        "Model load took longer than usual — likely downloaded weights on first run."
+                    )
 
             # Set max sequence length
             self.general_model.max_seq_length = self.config.max_sequence_length
@@ -125,16 +179,29 @@ class EmbeddingManager:
                 self.general_model, "version", "unknown"
             )
 
-            logger.info(
-                f"General model loaded: {self.model_info['general']['dimensions']} dimensions"
-            )
-
             # Load domain-specific model (GraphCodeBERT)
             logger.info(f"Loading domain model: {self.config.domain_model_name}")
             try:
-                self.domain_model = SentenceTransformer(
-                    self.config.domain_model_name, device=self.config.device
+                domain_indicator = self._LoadingIndicator(
+                    f"Loading domain model ({self.config.domain_model_name})"
                 )
+                dom_start = time.time()
+                domain_indicator.start()
+                try:
+                    self.domain_model = SentenceTransformer(
+                        self.config.domain_model_name, device=self.config.device
+                    )
+                finally:
+                    domain_indicator.stop()
+                    dom_dur = time.time() - dom_start
+                    logger.info(
+                        f"Domain model load completed in {dom_dur:.1f}s: {self.config.domain_model_name}"
+                    )
+                    if dom_dur > 5:
+                        logger.info(
+                            "Domain model load took longer than usual — likely downloaded weights on first run."
+                        )
+
                 self.domain_model.max_seq_length = self.config.max_sequence_length
 
                 self.model_info["domain"][
@@ -207,7 +274,7 @@ class EmbeddingManager:
                     text, self.general_model, "general"
                 )
                 # Note: We don't increment general_model_usage here as it's a fallback
-                
+
             domain_embedding = general_embedding
             self.embedding_stats["domain_model_usage"] += 1
 

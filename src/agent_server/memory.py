@@ -640,8 +640,10 @@ class MemoryManager:
         logger.info("Initializing Enhanced Memory Manager")
 
         try:
-            # Initialize Redis connection
-            redis_url = getattr(self.settings, "REDIS_URL", "redis://localhost:6379")
+            # Initialize Redis connection (use configured settings.redis_url)
+            # NOTE: settings is a pydantic settings object; use the attribute name
+            # `redis_url` (lowercase) so environment variable `REDIS_URL` is picked up.
+            redis_url = getattr(self.settings, "redis_url", "redis://localhost:6379")
             self.redis_client = redis.from_url(redis_url, decode_responses=True)
 
             # Test Redis connection

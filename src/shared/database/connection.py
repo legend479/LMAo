@@ -123,8 +123,46 @@ class DatabaseManager:
         try:
             logger.info("Initializing database...")
 
-            # Create all tables
-            Base.metadata.create_all(bind=self.engine)
+            # Create all tables.
+            # When running multiple worker processes (gunicorn/uvicorn with workers)
+            # concurrently, simultaneous calls to `create_all` can race and cause
+            # duplicate-type / unique-constraint errors in Postgres when types
+            # (e.g. enums) are created. To avoid that, acquire a Postgres
+            # advisory lock around schema creation so only one process performs
+            # the operation at a time. This is a minimal, backwards-compatible
+            # change that serializes DDL without requiring external migration
+            # tooling changes.
+
+            db_url = self.db_config.get("url", "")
+            if db_url and ("postgres" in db_url or "postgresql" in db_url):
+                from sqlalchemy import text
+
+                # Use a fixed 64-bit lock id. This should be stable across
+                # processes for the same application. Choose a large constant
+                # unlikely to collide with other apps.
+                ADVISORY_LOCK_KEY = 987654321012345678
+
+                conn = self.engine.connect()
+                try:
+                    # Acquire exclusive advisory lock (blocks until acquired)
+                    conn.execute(text(f"SELECT pg_advisory_lock({ADVISORY_LOCK_KEY})"))
+
+                    # Create tables while holding the lock
+                    Base.metadata.create_all(bind=conn)
+
+                finally:
+                    try:
+                        # Release the advisory lock
+                        conn.execute(
+                            text(f"SELECT pg_advisory_unlock({ADVISORY_LOCK_KEY})")
+                        )
+                    except Exception:
+                        # Best-effort unlock; ignore failures here
+                        pass
+                    conn.close()
+            else:
+                # Non-Postgres DBs can just run create_all as before
+                Base.metadata.create_all(bind=self.engine)
 
             # Verify connection
             from sqlalchemy import text

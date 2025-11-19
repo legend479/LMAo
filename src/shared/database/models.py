@@ -14,6 +14,8 @@ from sqlalchemy import (
     JSON,
     Float,
 )
+import uuid
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
@@ -28,7 +30,7 @@ class User(Base):
 
     __tablename__ = "users"
 
-    id = Column(String, primary_key=True)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     username = Column(String(255), unique=True, nullable=False, index=True)
     email = Column(String(255), unique=True, nullable=False, index=True)
     full_name = Column(String(255), nullable=True)
@@ -66,8 +68,10 @@ class Session(Base):
 
     __tablename__ = "sessions"
 
-    id = Column(String, primary_key=True)
-    user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+    )
     title = Column(String(255), nullable=True)
     created_at = Column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -110,8 +114,10 @@ class Document(Base):
 
     __tablename__ = "documents"
 
-    id = Column(String, primary_key=True)
-    user_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+    )
 
     # Document identification
     original_filename = Column(String(255), nullable=False)
@@ -170,8 +176,10 @@ class ToolExecution(Base):
 
     __tablename__ = "tool_executions"
 
-    id = Column(String, primary_key=True)
-    session_id = Column(String, ForeignKey("sessions.id"), nullable=False, index=True)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id = Column(
+        UUID(as_uuid=True), ForeignKey("sessions.id"), nullable=False, index=True
+    )
 
     # Tool identification
     tool_name = Column(String(100), nullable=False, index=True)
@@ -221,8 +229,10 @@ class WorkflowExecution(Base):
 
     __tablename__ = "workflow_executions"
 
-    id = Column(String, primary_key=True)
-    session_id = Column(String, ForeignKey("sessions.id"), nullable=False, index=True)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id = Column(
+        UUID(as_uuid=True), ForeignKey("sessions.id"), nullable=False, index=True
+    )
 
     # Workflow identification
     workflow_name = Column(String(100), nullable=False, index=True)

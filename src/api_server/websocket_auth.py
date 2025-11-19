@@ -7,6 +7,8 @@ import jwt
 from typing import Optional, Dict, Any
 from fastapi import WebSocket, HTTPException, status
 from urllib.parse import parse_qs
+from types import SimpleNamespace
+import uuid
 
 from src.shared.config import get_settings
 from src.shared.logging import get_logger
@@ -33,6 +35,19 @@ async def authenticate_websocket(websocket: WebSocket) -> Optional[User]:
         if not token:
             logger.warning("WebSocket connection attempted without token")
             return None
+
+        # Development/testing shortcut: accept a demo token
+        settings = get_settings()
+        if token == "mock-jwt-token" and settings.environment != "production":
+            logger.info("Using development mock token for WebSocket connection")
+            mock_user = SimpleNamespace(
+                id=uuid.UUID(int=1),
+                username="devuser",
+                email="devuser@example.com",
+                full_name="Development User",
+                is_active=True,
+            )
+            return mock_user
 
         # Decode JWT token
         settings = get_settings()

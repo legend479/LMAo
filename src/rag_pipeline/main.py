@@ -4,6 +4,8 @@ Specialized retrieval system optimized for software engineering content
 """
 
 import time
+import os
+import asyncio
 from typing import Dict, Any, List, Optional
 from dotenv import load_dotenv
 
@@ -60,131 +62,169 @@ class RAGPipeline:
 
         logger.info("Initializing RAG Pipeline")
 
-        try:
-            # Lazy imports to avoid circular dependencies
-            from .document_processor import DocumentProcessor
-            from .document_ingestion import DocumentIngestionService, IngestionConfig
-            from .vector_store import ElasticsearchStore, ElasticsearchConfig
-            from .search_engine import HybridSearchEngine, SearchConfig
-            from .embedding_manager import EmbeddingManager, EmbeddingConfig
-            from .query_processor import QueryProcessor  # NEW: Query processor
+        max_attempts = int(os.getenv("RAG_INIT_MAX_RETRIES", "12"))
+        backoff = int(os.getenv("RAG_INIT_BACKOFF_SECS", "5"))
 
-            # Create default configs if not provided
-            if self.ingestion_config is None:
-                self.ingestion_config = IngestionConfig(
-                    source_directories=[],
-                    supported_extensions=[".pdf", ".docx", ".pptx", ".txt", ".md"],
-                    max_file_size_mb=100,
-                    max_concurrent_files=5,
+        attempt = 0
+        while attempt < max_attempts:
+            attempt += 1
+            try:
+                # Reset partial state before each attempt
+                self.document_processor = None
+                self.embedding_manager = None
+                self.ingestion_service = None
+                self.vector_store = None
+                self.search_engine = None
+                self.query_processor = None
+                self.context_optimizer = None
+                self.adaptive_retrieval = None
+                self.hybrid_embeddings = None
+                self.optimized_ingestion = None
+
+                # Lazy imports to avoid circular dependencies
+                from .document_processor import DocumentProcessor
+                from .document_ingestion import (
+                    DocumentIngestionService,
+                    IngestionConfig,
                 )
-            elif isinstance(self.ingestion_config, dict):
-                self.ingestion_config = IngestionConfig(**self.ingestion_config)
+                from .vector_store import ElasticsearchStore, ElasticsearchConfig
+                from .search_engine import HybridSearchEngine, SearchConfig
+                from .embedding_manager import EmbeddingManager, EmbeddingConfig
+                from .query_processor import QueryProcessor  # NEW: Query processor
 
-            if self.elasticsearch_config is None:
-                self.elasticsearch_config = ElasticsearchConfig()
-            elif isinstance(self.elasticsearch_config, dict):
-                self.elasticsearch_config = ElasticsearchConfig(
-                    **self.elasticsearch_config
+                # Create default configs if not provided
+                if self.ingestion_config is None:
+                    self.ingestion_config = IngestionConfig(
+                        source_directories=[],
+                        supported_extensions=[".pdf", ".docx", ".pptx", ".txt", ".md"],
+                        max_file_size_mb=100,
+                        max_concurrent_files=5,
+                    )
+                elif isinstance(self.ingestion_config, dict):
+                    self.ingestion_config = IngestionConfig(**self.ingestion_config)
+
+                if self.elasticsearch_config is None:
+                    self.elasticsearch_config = ElasticsearchConfig()
+                elif isinstance(self.elasticsearch_config, dict):
+                    self.elasticsearch_config = ElasticsearchConfig(
+                        **self.elasticsearch_config
+                    )
+
+                if self.search_config is None:
+                    self.search_config = SearchConfig()
+                elif isinstance(self.search_config, dict):
+                    self.search_config = SearchConfig(**self.search_config)
+
+                if self.embedding_config is None:
+                    self.embedding_config = EmbeddingConfig()
+                elif isinstance(self.embedding_config, dict):
+                    self.embedding_config = EmbeddingConfig(**self.embedding_config)
+
+                # Initialize components
+                self.document_processor = DocumentProcessor()
+                self.embedding_manager = EmbeddingManager(self.embedding_config)
+                self.ingestion_service = DocumentIngestionService(self.ingestion_config)
+                self.vector_store = ElasticsearchStore(
+                    self.elasticsearch_config, self.embedding_manager
+                )
+                self.search_engine = HybridSearchEngine(
+                    self.vector_store, self.embedding_manager, self.search_config
+                )
+                self.query_processor = QueryProcessor()
+
+                # Initialize enhancement components
+                if self.enable_context_optimization:
+                    from .context_optimizer import ContextOptimizer
+
+                    self.context_optimizer = ContextOptimizer()
+
+                if self.enable_adaptive_retrieval:
+                    from .adaptive_retrieval import AdaptiveRetrievalEngine
+
+                    self.adaptive_retrieval = AdaptiveRetrievalEngine()
+
+                if self.enable_hybrid_embeddings:
+                    from .hybrid_embeddings import HybridEmbeddingSelector
+
+                    self.hybrid_embeddings = HybridEmbeddingSelector()
+
+                # Initialize components in order
+                await self.document_processor.initialize()
+                await self.embedding_manager.initialize()
+                await self.vector_store.initialize()
+                await self.search_engine.initialize()
+                await self.ingestion_service.initialize()
+                await self.query_processor.initialize()
+
+                # Initialize enhancement components
+                if self.context_optimizer:
+                    await self.context_optimizer.initialize()
+                    logger.info("Context optimizer initialized")
+
+                if self.adaptive_retrieval:
+                    await self.adaptive_retrieval.initialize(
+                        self.search_engine, self.query_processor
+                    )
+                    logger.info("Adaptive retrieval initialized")
+
+                if self.hybrid_embeddings:
+                    await self.hybrid_embeddings.initialize()
+                    logger.info("Hybrid embeddings initialized")
+
+                # Initialize optimized ingestion service (NEW)
+                if self.enable_optimized_ingestion:
+                    try:
+                        from .optimized_ingestion import (
+                            OptimizedDocumentIngestion,
+                            OptimizedIngestionConfig,
+                        )
+
+                        # Create optimized ingestion config
+                        opt_config = OptimizedIngestionConfig(
+                            batch_size=50,
+                            max_concurrent_files=10,
+                            embedding_batch_size=64,
+                            bulk_index_size=100,
+                            cache_embeddings=True,
+                            cache_file_hashes=True,
+                        )
+
+                        self.optimized_ingestion = OptimizedDocumentIngestion(
+                            document_processor=self.document_processor,
+                            embedding_manager=self.embedding_manager,
+                            vector_store=self.vector_store,
+                            config=opt_config,
+                        )
+                        logger.info(
+                            "Optimized ingestion service initialized (5-10x faster)"
+                        )
+                    except ImportError as e:
+                        logger.warning(f"Optimized ingestion not available: {e}")
+                        self.enable_optimized_ingestion = False
+
+                self._initialized = True
+                logger.info("RAG Pipeline initialized successfully")
+                return
+
+            except Exception as e:
+                logger.error(
+                    f"RAG Pipeline initialization attempt {attempt} failed",
+                    error=str(e),
                 )
 
-            if self.search_config is None:
-                self.search_config = SearchConfig()
-            elif isinstance(self.search_config, dict):
-                self.search_config = SearchConfig(**self.search_config)
+                # Ensure we mark as not initialized and clean partial state
+                self._initialized = False
 
-            if self.embedding_config is None:
-                self.embedding_config = EmbeddingConfig()
-            elif isinstance(self.embedding_config, dict):
-                self.embedding_config = EmbeddingConfig(**self.embedding_config)
+                if attempt >= max_attempts:
+                    logger.error("Max initialization attempts reached, failing")
+                    raise
 
-            # Initialize components
-            self.document_processor = DocumentProcessor()
-            self.embedding_manager = EmbeddingManager(self.embedding_config)
-            self.ingestion_service = DocumentIngestionService(self.ingestion_config)
-            self.vector_store = ElasticsearchStore(
-                self.elasticsearch_config, self.embedding_manager
-            )
-            self.search_engine = HybridSearchEngine(
-                self.vector_store, self.embedding_manager, self.search_config
-            )
-            self.query_processor = QueryProcessor()
-
-            # Initialize enhancement components
-            if self.enable_context_optimization:
-                from .context_optimizer import ContextOptimizer
-
-                self.context_optimizer = ContextOptimizer()
-
-            if self.enable_adaptive_retrieval:
-                from .adaptive_retrieval import AdaptiveRetrievalEngine
-
-                self.adaptive_retrieval = AdaptiveRetrievalEngine()
-
-            if self.enable_hybrid_embeddings:
-                from .hybrid_embeddings import HybridEmbeddingSelector
-
-                self.hybrid_embeddings = HybridEmbeddingSelector()
-
-            # Initialize components in order
-            await self.document_processor.initialize()
-            await self.embedding_manager.initialize()
-            await self.vector_store.initialize()
-            await self.search_engine.initialize()
-            await self.ingestion_service.initialize()
-            await self.query_processor.initialize()
-
-            # Initialize enhancement components
-            if self.context_optimizer:
-                await self.context_optimizer.initialize()
-                logger.info("Context optimizer initialized")
-
-            if self.adaptive_retrieval:
-                await self.adaptive_retrieval.initialize(
-                    self.search_engine, self.query_processor
+                # Backoff before retrying
+                wait = backoff * attempt
+                logger.info(
+                    f"Retrying RAG initialization in {wait}s (attempt {attempt+1}/{max_attempts})"
                 )
-                logger.info("Adaptive retrieval initialized")
-
-            if self.hybrid_embeddings:
-                await self.hybrid_embeddings.initialize()
-                logger.info("Hybrid embeddings initialized")
-
-            # Initialize optimized ingestion service (NEW)
-            if self.enable_optimized_ingestion:
-                try:
-                    from .optimized_ingestion import (
-                        OptimizedDocumentIngestion,
-                        OptimizedIngestionConfig,
-                    )
-
-                    # Create optimized ingestion config
-                    opt_config = OptimizedIngestionConfig(
-                        batch_size=50,
-                        max_concurrent_files=10,
-                        embedding_batch_size=64,
-                        bulk_index_size=100,
-                        cache_embeddings=True,
-                        cache_file_hashes=True,
-                    )
-
-                    self.optimized_ingestion = OptimizedDocumentIngestion(
-                        document_processor=self.document_processor,
-                        embedding_manager=self.embedding_manager,
-                        vector_store=self.vector_store,
-                        config=opt_config,
-                    )
-                    logger.info(
-                        "Optimized ingestion service initialized (5-10x faster)"
-                    )
-                except ImportError as e:
-                    logger.warning(f"Optimized ingestion not available: {e}")
-                    self.enable_optimized_ingestion = False
-
-            self._initialized = True
-            logger.info("RAG Pipeline initialized successfully")
-
-        except Exception as e:
-            logger.error("Failed to initialize RAG Pipeline", error=str(e))
-            raise
+                await asyncio.sleep(wait)
 
     async def ingest_document(
         self, file_path: str, metadata: Dict[str, Any] = None

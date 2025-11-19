@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 -- Create conversations table
 CREATE TABLE IF NOT EXISTS conversations (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    session_id VARCHAR(255) NOT NULL,
+    session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     user_id UUID REFERENCES users(id) ON DELETE SET NULL,
     title VARCHAR(500),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -82,7 +82,7 @@ CREATE TABLE IF NOT EXISTS chunks (
 -- Create tool_executions table
 CREATE TABLE IF NOT EXISTS tool_executions (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    session_id VARCHAR(255) NOT NULL,
+    session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
     tool_name VARCHAR(255) NOT NULL,
     parameters JSONB,
     result JSONB,
@@ -92,6 +92,31 @@ CREATE TABLE IF NOT EXISTS tool_executions (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Create workflow_executions table (LangGraph / orchestrator)
+CREATE TABLE IF NOT EXISTS workflow_executions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    session_id UUID NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    workflow_name VARCHAR(100) NOT NULL,
+    workflow_version VARCHAR(20),
+    plan_id VARCHAR(100) NOT NULL,
+    started_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP WITH TIME ZONE,
+    paused_at TIMESTAMP WITH TIME ZONE,
+    resumed_at TIMESTAMP WITH TIME ZONE,
+    status VARCHAR(50) DEFAULT 'running' NOT NULL,
+    current_step VARCHAR(100),
+    total_steps INTEGER,
+    completed_steps INTEGER DEFAULT 0 NOT NULL,
+    workflow_state JSONB DEFAULT '{}',
+    checkpoint_data JSONB DEFAULT '{}',
+    execution_path JSONB DEFAULT '[]',
+    final_result JSONB DEFAULT '{}',
+    error_message TEXT,
+    error_step VARCHAR(100),
+    total_execution_time FLOAT,
+    step_execution_times JSONB DEFAULT '{}',
+    workflow_metadata JSONB DEFAULT '{}'
+);
 -- Create user_preferences table
 CREATE TABLE IF NOT EXISTS user_preferences (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
